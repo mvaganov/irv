@@ -49,6 +49,8 @@ public class IRV {
 	}
 
 	public class RunoffHistory {
+		public string title;
+		public IList<Candidate>? winner;
 		/// how many votes total were recorded
 		public int numVotes;
 		/// <summary>who the candidates are.</summary>
@@ -76,19 +78,72 @@ public class IRV {
 
 	public class VoteBloc {
 		public Candidate candidate;
-		public int startPosition;
+		public int position;
 		public int voteCount;
-		public class BlocMigration {
+		public class Migration {
 			public Candidate newBoss;
-			public int population, fromPosition, toPosition;
-			public BlocMigration(Candidate destination, int voteCount, int indexFrom, int indexTo) {
-				this.newBoss = destination; this.population = voteCount; this.fromPosition = indexFrom; this.toPosition = indexTo;
+			public int voteCount, fromPosition, toPosition;
+			public Migration(Candidate destination, int voteCount, int indexFrom, int indexTo) {
+				this.newBoss = destination; this.voteCount = voteCount; this.fromPosition = indexFrom; this.toPosition = indexTo;
 			}
 		}
 		/// the next blocs that these votes go into
-		public List<BlocMigration> migrations;
+		public List<Migration> migrations;
 		public VoteBloc(Candidate candidate, int start, int votes) {
-			this.candidate = candidate; this.startPosition = start; this.voteCount = votes; this.migrations = null;
+			this.candidate = candidate; this.position = start; this.voteCount = votes; this.migrations = null;
+		}
+		public static void CalculateMigrations(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted,
+			Dictionary<Candidate, VotesPerCandidate> voteMigration) {
+			for (int c = 0; c < blocsThisState.Count; ++c) {
+				VoteBloc thisBloc = blocsThisState[c];
+				Candidate thisBlocName = thisBloc.candidate;
+				if (thisBlocName == candidateForExhausted) continue; // don't work on exhausted ballots
+				int oldBlocIndex = GetBlocIndex(thisBlocName, blocsLastState);
+				VoteBloc? lastBloc = null;
+				int delta = thisBloc.voteCount;
+				if (oldBlocIndex != -1) {
+					lastBloc = blocsLastState[oldBlocIndex];
+					if (lastBloc.candidate != thisBlocName) {
+						throw new System.Exception("we got a naming and/or searching problem...");
+					}
+					delta = thisBloc.voteCount - delta;
+				} else {
+					throw new System.Exception($"`{thisBlocName}` did not exist in previous state");
+				}
+				// if the size is the same, do an easy shift.
+				if (delta == 0) {
+					lastBloc.migrations = new List<Migration>();
+					lastBloc.migrations.Add(new Migration(thisBloc.candidate, lastBloc.voteCount, lastBloc.position, thisBloc.position));
+				}
+			}
+
+			// the complex shifts were not calculated in the last forloop. but they were calculated in voteMigrationHistory
+			Dictionary<Candidate, int> lastStateBlocAcct = new Dictionary<Candidate, int>(); // how much is being transferred from
+			Dictionary<Candidate, int> thisStateBlocAcct = new Dictionary<Candidate, int>(); // how much is being transferred to
+			foreach (var k in voteMigration) { // from
+				VoteBloc lastBloc = blocsLastState[GetBlocIndex(k.Key, blocsLastState)];
+				if (!lastStateBlocAcct.TryGetValue(lastBloc.candidate, out _)) {
+					lastStateBlocAcct[lastBloc.candidate] = 0;
+				}
+				foreach (var n in voteMigration[k.Key]) { // to
+					int blocIndex = GetBlocIndex(n.Key, blocsLastState);
+					VoteBloc thisBloc = blocsThisState[blocIndex];
+					if (!thisStateBlocAcct.TryGetValue(thisBloc.candidate, out _)) {
+						VoteBloc? lastThisBloc = (blocIndex >= 0) ? blocsLastState[blocIndex] : null;
+						if (lastThisBloc != null) {
+							thisStateBlocAcct[thisBloc.candidate] = lastThisBloc.voteCount;
+						} else {
+							thisStateBlocAcct[thisBloc.candidate] = 0;
+						}
+					}
+					List<Ballot> movingVotes = n.Value;
+					if (lastBloc.migrations == null) lastBloc.migrations = new List<VoteBloc.Migration>();
+					lastBloc.migrations.Add(new VoteBloc.Migration(thisBloc.candidate, movingVotes.Count,
+						lastBloc.position + lastStateBlocAcct[lastBloc.candidate], thisBloc.position + thisStateBlocAcct[thisBloc.candidate]));
+					lastStateBlocAcct[lastBloc.candidate] = lastStateBlocAcct[lastBloc.candidate] + movingVotes.Count;
+					thisStateBlocAcct[thisBloc.candidate] = thisStateBlocAcct[thisBloc.candidate] + movingVotes.Count;
+				}
+			}
 		}
 	}
 
@@ -191,42 +246,30 @@ public class IRV {
 	}
 
 	/// <returns>The order choices of choices based on the tally, using tieBreakerData weighting to separate ties.</returns>
-	/// <param name="tally">Tally.</param>
-	/// <param name="tieBreakerData">Tie breaker data.</param>
-	/// <param name="allChoicesPossible">All choices possible.</param>
-	/// <param name="forceTieBreakerDataAsOrder">Force tie breaker data as order.</param>
-	static List<Candidate> IRV_orderChoices(VotesPerCandidate tally, Dictionary<Candidate, float> tieBreakerData,
-		bool allChoicesPossible = false, bool forceTieBreakerDataAsOrder = false) {
-		List<Candidate> order = new List<Candidate>();
-		foreach (var k in tally) { order.Add(k.Key); }
+	static List<Candidate> IRV_OrderCandidatesForBlocs(VotesPerCandidate tally, Dictionary<Candidate, float> tieBreakerData,
+		Candidate? candidateForExhausted, bool forceTieBreakerDataAsOrder = false) {
+		List<Candidate> order = new List<Candidate>(tally.Keys);
+		HashSet<Candidate> candidatesInTheVisualization = new HashSet<Candidate>(order);
+		foreach(var kvp in tieBreakerData) {
+			if (candidatesInTheVisualization.Add(kvp.Key)) {
+				order.Add(kvp.Key);
+			}
+		}
 		order.Sort((a, b) => {
-			float diff = tally[b].Count - tally[a].Count;
+			int countA = tally.TryGetValue(a, out List<Ballot>? ballotsA) ? ballotsA.Count : 0;
+			int countB = tally.TryGetValue(b, out List<Ballot>? ballotsB) ? ballotsB.Count : 0;
+			float diff = countB - countA;
 			if (forceTieBreakerDataAsOrder || diff == 0) {
 				diff = tieBreakerData[b] - tieBreakerData[a];
 			}
 			return (int)(diff * 1024);
 		});
-		if (allChoicesPossible) {
-			// go through all of the votes and put non-first-order candidates in there too (people that nobody voted for first)
-			foreach (var k in tally) {
-				List<Ballot> ballots = tally[k.Key];
-				for (int v = 0; v < ballots.Count; ++v) {
-					Candidate[] possibleChoices = ballots[v].vote;
-					for (int c = 0; c < possibleChoices.Length; ++c) {
-						Candidate possibleChoice = possibleChoices[c];
-						if (order.IndexOf(possibleChoice) < 0) {
-							order.Add(possibleChoice);
-						}
-					}
-				}
-			}
-		}
 		// ensure that exhausted candidates appear at the end
-		if (order[order.Count - 1] != BasicExhaustedCandidate) {
-			int exhaustedIndex = order.IndexOf(BasicExhaustedCandidate);
+		if (candidateForExhausted != null && order[order.Count - 1] != candidateForExhausted) {
+			int exhaustedIndex = order.IndexOf(candidateForExhausted);
 			if (exhaustedIndex >= 0) {
-				order.RemoveAt(exhaustedIndex); // order.splice(exhaustedIndex, 1);
-				order.Add(BasicExhaustedCandidate);
+				order.RemoveAt(exhaustedIndex);
+				order.Add(candidateForExhausted);
 			}
 		}
 		return order;
@@ -259,26 +302,43 @@ public class IRV {
 		return null;
 	}
 
-	static List<VoteBloc> calculateBlocs(List<Candidate> sorted, VotesPerCandidate voteState, Dictionary<Candidate, float> candidateWeight) {
+	static List<VoteBloc> CalculateBlocs(List<Candidate> sorted, VotesPerCandidate voteState, Dictionary<Candidate, float> candidateWeight) {
 		List<VoteBloc> blocsThisState = new List<VoteBloc>();
 		int cursor = 0;
 		for (int s = 0; s < sorted.Count; ++s) {
-			List<Ballot> thisGuysVotes = voteState[sorted[s]];
-			if (thisGuysVotes != null && thisGuysVotes.Count != 0) {
-				VoteBloc bloc = new VoteBloc(sorted[s], cursor, thisGuysVotes.Count);
+			//List<Ballot> thisGuysVotes = voteState[sorted[s]];
+			if (voteState.TryGetValue(sorted[s], out List<Ballot>? thisGuyVotes) && thisGuyVotes.Count != 0) {
+				VoteBloc bloc = new VoteBloc(sorted[s], cursor, thisGuyVotes.Count);
 				blocsThisState.Add(bloc);
-				cursor += thisGuysVotes.Count;
+				cursor += thisGuyVotes.Count;
 			}
 		}
 		return blocsThisState;
 	}
 
 	// finds where a bloc is in a given bloc state
-	private static int findBlocIndex(Candidate candidateName, List<VoteBloc> blocList) {
+	private static int GetBlocIndex(Candidate candidateName, List<VoteBloc> blocList) {
 		for (int i = 0; i < blocList.Count; ++i) {
 			if (blocList[i].candidate == candidateName) { return i; }
 		}
 		return -1;
+	}
+
+	public static Dictionary<Candidate,float> CalculateWeightByStateImportance(List<VotesPerCandidate> voteStateHistory) {
+		Dictionary<Candidate, float> weightsForThisVisualization = new Dictionary<Candidate, float>();
+		for (int s = 0; s < voteStateHistory.Count; ++s) {
+			VotesPerCandidate state = voteStateHistory[s];
+			foreach (KeyValuePair<Candidate, List<Ballot>> c in state) {
+				float val;
+				if (weightsForThisVisualization.TryGetValue(c.Key, out val)) {
+					val += c.Value.Count;
+				} else {
+					val = c.Value.Count;
+				}
+				weightsForThisVisualization[c.Key] = val;
+			}
+		}
+		return weightsForThisVisualization;
 	}
 
 	/// <summary>calculate visualization model.</summary>
@@ -291,102 +351,69 @@ public class IRV {
 	static void IRV_calculateVisualizationModel(
 		List<List<VoteBloc>> out_visBlocs,
 		List<VotesPerCandidate> voteStateHistory,
-		List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory) {
+		List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory, Candidate? candidateForExhausted) {
 		List<VoteBloc> blocsThisState;
-		List<VoteBloc> blocsLastState = null;
+		List<VoteBloc>? blocsLastState = null;
 
-		// to make the visualization more coherent, calculate the order in which candidates are exhausted, and weight them visually that way
-		Dictionary<Candidate, float> weightsForThisVisualization = new Dictionary<Candidate, float>();
-		for (int s = 0; s < voteStateHistory.Count; ++s) {
-			VotesPerCandidate state = voteStateHistory[s];
-			foreach (var c in state) {
-				float val;
-				if (weightsForThisVisualization.TryGetValue(c.Key, out val)) {
-					val += state[c.Key].Count; // TODO replace state[c.Key] with c.Value
-				} else {
-					val = state[c.Key].Count;
-				}
-				weightsForThisVisualization[c.Key] = val;
-			}
-		}
-
+		Dictionary<Candidate, float> weightsForThisVisualization = CalculateWeightByStateImportance(voteStateHistory);
 		for (int stateIndex = 0; stateIndex < voteStateHistory.Count; ++stateIndex) {
-			// sort the candidates based on who is likely to win right now
-			List<Candidate> sorted = IRV_orderChoices(voteStateHistory[stateIndex], weightsForThisVisualization, false, true);
-			// organize those candidates into blocs, and put all those blocs into a list. this is a vote state
-			blocsThisState = calculateBlocs(sorted, voteStateHistory[stateIndex], weightsForThisVisualization);
-			// add the vote state to a list of vote states
+			List<Candidate> sorted = IRV_OrderCandidatesForBlocs(voteStateHistory[stateIndex], weightsForThisVisualization, candidateForExhausted, true);
+			blocsThisState = CalculateBlocs(sorted, voteStateHistory[stateIndex], weightsForThisVisualization);
 			out_visBlocs.Add(blocsThisState);
 			// if we can discover how the last vote state turned into this one
 			if (blocsLastState != null) {
-				// for each block in the current state
-				for (int c = 0; c < blocsThisState.Count; ++c) {
-					VoteBloc thisBloc = blocsThisState[c];
-					Candidate thisBlocName = thisBloc.candidate;
-					if (thisBlocName == BasicExhaustedCandidate) continue; // don't describe exhausted ballot continuation
-																								// find where it was in the previous state
-					int oldBlocIndex = findBlocIndex(thisBlocName, blocsLastState);
-					VoteBloc lastBloc = null;
-					int delta = thisBloc.voteCount;
-					if (oldBlocIndex != -1) {
-						lastBloc = blocsLastState[oldBlocIndex];
-						if (lastBloc.candidate != thisBlocName) {
-							throw new System.Exception("we got a naming and/or searching problem...");
-							//return IRV_err("we got a naming and/or searching problem...");
-						}
-						delta = thisBloc.voteCount - delta;
-					}
-					// if the size is the same, do an easy shift.
-					if (delta == 0) {
-						//lastBloc.n = [{ // next
-						//	D:thisBloc.C, // destination
-						//	v:lastBloc.v, // vote count
-						//	f:lastBloc.s, // index From
-						//	t:thisBloc.s // index To
-						//}];
-						lastBloc.migrations = new List<VoteBloc.BlocMigration>();
-						lastBloc.migrations.Add(new VoteBloc.BlocMigration(thisBloc.candidate, lastBloc.voteCount, lastBloc.startPosition, thisBloc.startPosition));
-					}
-				}
-				// the complex shifts were not calculated in the last forloop. but they were calculated in voteMigrationHistory
-				Dictionary<Candidate, VotesPerCandidate> thisTransition = voteMigrationHistory[stateIndex - 1];
-				Dictionary<Candidate, int>
-				lastStateBlocAcct = new Dictionary<Candidate, int>(),
-				thisStateBlocAcct = new Dictionary<Candidate, int>(); // keeps track of how much is being transfer from/to
-				foreach (var k in thisTransition) { // from
-					VoteBloc lastBloc = blocsLastState[findBlocIndex(k.Key, blocsLastState)];
-					int countBloc;
-					if (!lastStateBlocAcct.TryGetValue(lastBloc.candidate, out countBloc)) {
-						//!lastStateBlocAcct[lastBloc.C]) lastStateBlocAcct[lastBloc.C] = 0;
-						countBloc = 0;
-						lastStateBlocAcct[lastBloc.candidate] = 0;
-					}
-					foreach (var n in thisTransition[k.Key]) { // to
-						VoteBloc thisBloc = blocsThisState[findBlocIndex(n.Key, blocsThisState)];
-						if (!thisStateBlocAcct.TryGetValue(thisBloc.candidate, out countBloc)) {
-							//thisStateBlocAcct[thisBloc.C]) {
-							int blocIndex = findBlocIndex(n.Key, blocsLastState);
-							VoteBloc lastThisBloc = (blocIndex >= 0) ? blocsLastState[blocIndex] : null;
-							if (lastThisBloc != null) {
-								thisStateBlocAcct[thisBloc.candidate] = lastThisBloc.voteCount;
-							} else {
-								thisStateBlocAcct[thisBloc.candidate] = 0;
-							}
-						}
-						List<Ballot> movingVotes = n.Value;//thisTransition[k.Key][n.Key];
-						if (lastBloc.migrations == null) lastBloc.migrations = new List<VoteBloc.BlocMigration>();
-						//lastBloc.n.Add({ // next
-						//	D:thisBloc.C, // destination
-						//	v:movingVotes.length, // vote count
-						//	f:lastBloc.s + lastStateBlocAcct[lastBloc.C], // index From
-						//	t:thisBloc.s + thisStateBlocAcct[thisBloc.C] // index To
-						//});
-						lastBloc.migrations.Add(new VoteBloc.BlocMigration(thisBloc.candidate, movingVotes.Count,
-							lastBloc.startPosition + lastStateBlocAcct[lastBloc.candidate], thisBloc.startPosition + thisStateBlocAcct[thisBloc.candidate]));
-						lastStateBlocAcct[lastBloc.candidate] = lastStateBlocAcct[lastBloc.candidate] + movingVotes.Count;
-						thisStateBlocAcct[thisBloc.candidate] = thisStateBlocAcct[thisBloc.candidate] + movingVotes.Count;
-					}
-				}
+				VoteBloc.CalculateMigrations(blocsThisState, blocsLastState, candidateForExhausted, voteMigrationHistory[stateIndex - 1]);
+				//// for each block in the current state
+				//for (int c = 0; c < blocsThisState.Count; ++c) {
+				//	VoteBloc thisBloc = blocsThisState[c];
+				//	Candidate thisBlocName = thisBloc.candidate;
+				//	if (thisBlocName == candidateForExhausted) continue; // don't work on exhausted ballots
+				//	int oldBlocIndex = GetBlocIndex(thisBlocName, blocsLastState);
+				//	VoteBloc? lastBloc = null;
+				//	int delta = thisBloc.voteCount;
+				//	if (oldBlocIndex != -1) {
+				//		lastBloc = blocsLastState[oldBlocIndex];
+				//		if (lastBloc.candidate != thisBlocName) {
+				//			throw new System.Exception("we got a naming and/or searching problem...");
+				//		}
+				//		delta = thisBloc.voteCount - delta;
+				//	} else {
+				//		throw new System.Exception($"`{thisBlocName}` did not exist in previous state");
+				//	}
+				//	// if the size is the same, do an easy shift.
+				//	if (delta == 0) {
+				//		lastBloc.migrations = new List<VoteBloc.Migration>();
+				//		lastBloc.migrations.Add(new VoteBloc.Migration(thisBloc.candidate, lastBloc.voteCount, lastBloc.position, thisBloc.position));
+				//	}
+				//}
+				//// the complex shifts were not calculated in the last forloop. but they were calculated in voteMigrationHistory
+				//Dictionary<Candidate, VotesPerCandidate> thisTransition = voteMigrationHistory[stateIndex - 1];
+				//Dictionary<Candidate, int> lastStateBlocAcct = new Dictionary<Candidate, int>(); // how much is being transferred from
+				//Dictionary<Candidate, int> thisStateBlocAcct = new Dictionary<Candidate, int>(); // how much is being transferred to
+				//foreach (var k in thisTransition) { // from
+				//	VoteBloc lastBloc = blocsLastState[GetBlocIndex(k.Key, blocsLastState)];
+				//	if (!lastStateBlocAcct.TryGetValue(lastBloc.candidate, out _)) {
+				//		lastStateBlocAcct[lastBloc.candidate] = 0;
+				//	}
+				//	foreach (var n in thisTransition[k.Key]) { // to
+				//		int blocIndex = GetBlocIndex(n.Key, blocsLastState);
+				//		VoteBloc thisBloc = blocsThisState[blocIndex];
+				//		if (!thisStateBlocAcct.TryGetValue(thisBloc.candidate, out _)) {
+				//			VoteBloc? lastThisBloc = (blocIndex >= 0) ? blocsLastState[blocIndex] : null;
+				//			if (lastThisBloc != null) {
+				//				thisStateBlocAcct[thisBloc.candidate] = lastThisBloc.voteCount;
+				//			} else {
+				//				thisStateBlocAcct[thisBloc.candidate] = 0;
+				//			}
+				//		}
+				//		List<Ballot> movingVotes = n.Value;
+				//		if (lastBloc.migrations == null) lastBloc.migrations = new List<VoteBloc.Migration>();
+				//		lastBloc.migrations.Add(new VoteBloc.Migration(thisBloc.candidate, movingVotes.Count,
+				//			lastBloc.position + lastStateBlocAcct[lastBloc.candidate], thisBloc.position + thisStateBlocAcct[thisBloc.candidate]));
+				//		lastStateBlocAcct[lastBloc.candidate] = lastStateBlocAcct[lastBloc.candidate] + movingVotes.Count;
+				//		thisStateBlocAcct[thisBloc.candidate] = thisStateBlocAcct[thisBloc.candidate] + movingVotes.Count;
+				//	}
+				//}
 			}
 			blocsLastState = blocsThisState;
 		}
@@ -434,10 +461,10 @@ public class IRV {
 					out_conversionsMade[bloc.candidate] = (out_conversionsMade.ContainsKey(bloc.candidate))
 						? (out_conversionsMade[bloc.candidate] + 1) : 1;
 				}
-				List<VoteBloc.BlocMigration> nextList = bloc.migrations;
+				List<VoteBloc.Migration> nextList = bloc.migrations;
 				if (nextList != null) {
 					for (int n = 0; n < nextList.Count; ++n) {
-						VoteBloc.BlocMigration nextEntry = nextList[n];
+						VoteBloc.Migration nextEntry = nextList[n];
 						if (out_conversionsMade != null) {
 							out_conversionsMade[nextEntry.newBoss] = (out_conversionsMade.ContainsKey(nextEntry.newBoss))
 								? (out_conversionsMade[nextEntry.newBoss] + 1) : 1;
@@ -495,71 +522,77 @@ public class IRV {
 		}
 		List<Candidate> candidates = IRV_weightedVoteCalc(allBallots); // do a simple guess of who will win using a weighted vote algorithm
 		List<Candidate> winners = new List<Candidate>(); // simple list of candidates who have won
-		List<RunoffResult> results = new List<RunoffResult>(); // detailed results: {r:Number (rank),C:String||Array (winning candidates),v:Number (vote count),showme:String (how the results were developed visual)
-		int place = 0; // keeps track of which rank is being calculated right now
-		RunoffResult best = null; // the most recent best candidate(s).
 
-		Candidate exhaustedCandidate = GenerateExhaustedCandidatePlaceholder(candidates);
+		Candidate candidateForExhaustedBallots = GenerateExhaustedCandidatePlaceholder(candidates);
 		IRV_ColorAssignment(candidates, new List<Color>(s_IRV_colorList));
-		candidates.Insert(0, exhaustedCandidate);
+		candidates.Insert(0, candidateForExhaustedBallots);
 
 		IEnumerator<Response> calcIteration() {
-			// start with the winners from the system. they can't win again.
-			HashSet<Candidate> exhastedCandidates = new HashSet<Candidate>(winners);
-			// how votes move during the instant-runoff-vote
-			List<VotesPerCandidate> voteStateHistory = new List<VotesPerCandidate>();
-			// array of rounds, each round has an array of shifts, each shift is an array with the voter ID and the choice.
-			List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory =
-				new List<Dictionary<Candidate, VotesPerCandidate>>();
+			List<RunoffHistory> results = new List<RunoffHistory>(); // detailed results: {r:Number (rank),C:String||Array (winning candidates),v:Number (vote count),showme:String (how the results were developed visual)
+			for (int place = 0; maxWinnersCalculated < 0 || place < maxWinnersCalculated; ++place) {
+				//int place = 0; // keeps track of which rank is being calculated right now
+				// start with the winners from the system. they can't win again.
+				HashSet<Candidate> exhastedCandidates = new HashSet<Candidate>(winners);
+				// how votes move during the instant-runoff-vote
+				//List<VotesPerCandidate> voteStateHistory = new List<VotesPerCandidate>();
+				// array of rounds, each round has an array of shifts, each shift is an array with the voter ID and the choice.
+				//List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory;
 
-			List<RankedChoiceElectionResultsStepByStep>? elections = null;
-			// do process!
-			IEnumerator<Response> iter = RankedVoteProcessing(exhastedCandidates, allBallots, exhaustedCandidate);
-			while (iter.MoveNext()) {
-				elections = iter.Current.Message as List<RankedChoiceElectionResultsStepByStep>;
-				yield return iter.Current;
-			}
-			Log.WriteLine(elections?.Count ?? 0);
-			//best = IRV_calcBestFrom(exhastedCandidates, allBallots, voteStateHistory, voteMigrationHistory, exhaustedCandidate);
+				List<RankedChoiceElectionResultsStepByStep>? elections = null;
+				// do process!
+				IEnumerator<Response> iter = RankedVoteProcessing(exhastedCandidates, allBallots, candidateForExhaustedBallots);
+				while (iter.MoveNext()) {
+					elections = iter.Current.Message as List<RankedChoiceElectionResultsStepByStep>;
+					yield return iter.Current;
+				}
+				Log.WriteLine(elections?.Count ?? 0);
+				if (elections != null && elections.Count == 0) {
+					break;
+				}
+				//best = IRV_calcBestFrom(exhastedCandidates, allBallots, voteStateHistory, voteMigrationHistory, exhaustedCandidate);
 
-			//			Debug.Log(Stringify(best));
-			//			Debug.Log(Stringify(voteStateHistory));
-			//			Debug.Log(Stringify(voteMigrationHistory));
+				//			Debug.Log(Stringify(best));
+				//			Debug.Log(Stringify(voteStateHistory));
+				//			Debug.Log(Stringify(voteMigrationHistory));
+				for (int i = 0; elections != null && i < elections.Count; ++i) {
+					//if (best != null) {
+					// array of voting blocs {candidate:id, indexRange:[#,#], color:"#XXXXXX", votes:[]}
+					List<List<VoteBloc>> visBlocs = new List<List<VoteBloc>>();
+					// create serializable easily expression of the Instant Run-off Vote
+					List<VotesPerCandidate> voteStateHistory = elections[i].out_voteState;
+					List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory = elections[i].out_voteMigrationHistory;
+					IRV_calculateVisualizationModel(visBlocs, voteStateHistory, voteMigrationHistory, candidateForExhaustedBallots);
 
-			if (best != null) {
-				// array of voting blocs {candidate:id, indexRange:[#,#], color:"#XXXXXX", votes:[]}
-				List<List<VoteBloc>> visBlocs = new List<List<VoteBloc>>();
-				// create serializable easily expression of the Instant Run-off Vote
-				IRV_calculateVisualizationModel(visBlocs, voteStateHistory, voteMigrationHistory);
+					RunoffHistory serialized =
+						IRV_serializeVisualizationBlocData(visBlocs, candidates, allBallots.Count, "rank" + place);
 
-				RunoffHistory serialized =
-					IRV_serializeVisualizationBlocData(visBlocs, candidates, allBallots.Count, "rank" + place);
-
-				// IRV_out(place+ "> "+best.winner);
-				best.rank = place;
-				best.showme = serialized;
-				results.Add(best);
-				if (best.winner.Count > 1) {
-					place += best.winner.Count - 1; // the -1 is because place gets an automatic ++ in the main loop
-					winners.AddRange(best.winner); //winners = winners.concat(best.winner);
+					// IRV_out(place+ "> "+best.winner);
+					serialized.title = $"rank {place}";
+					serialized.winner = elections[i].winner;
+					//best.rank = place;
+					//best.showme = serialized;
+					results.Add(serialized);
+					if (serialized.winner != null) {
+						place += serialized.winner.Count - 1; // the -1 is because place gets an automatic ++ in the main loop
+						winners.AddRange(serialized.winner); //winners = winners.concat(best.winner);
+					}
+				}
+				place++;
+				if (maxWinnersCalculated < 0 || place < maxWinnersCalculated) {
+					yield return Response.Processing(results);
 				} else {
-					winners.Add(best.winner[0]); //winners.push(best.winner);
+					break;
 				}
 			}
-			place++;
-			if (best != null && (maxWinnersCalculated < 0 || place < maxWinnersCalculated)) {
-				//NS.Timer.setTimeout(() => { calcIteration(calcCb); }, 1); // TODO set timer to 0
-				yield return Response.Processing(results);
-			} else {
-				//if (calcCb != null) { calcCb(results); }
-				yield return Response.Success(results);
-			}
+			yield return Response.Success(results);
 		}
 		IEnumerator<Response> iterator = calcIteration();
 		while (iterator.MoveNext()) {
 			yield return iterator.Current;
 		}
 	}
+
+
 
 	//void IRV_calc(List<Ballot> allBallots, object? outputContainer, int maxWinnersCalculated = -1, WhatToDoWithResults? cb = null) {
 	//	List<Ballot> originalBallots = allBallots; // reverence to source data. originalBallots may be marked up.
@@ -732,8 +765,12 @@ public class IRV {
 		List<RankedChoiceElectionResultsStepByStep> electionsToProcess = new List<RankedChoiceElectionResultsStepByStep>();
 		RankedChoiceElectionResultsStepByStep r = new RankedChoiceElectionResultsStepByStep();
 		foreach(Candidate c in exhastedCandidates) r.exhaustedCandidates.Add(c);
-		electionsToProcess.Add(r);
 		r.CalculateNextState(allBallots, candidateForExhaustedBallots);
+		if (r.IsExhausted(candidateForExhaustedBallots)) {
+			yield return Response.Success(electionsToProcess);
+			yield break;
+		}
+		electionsToProcess.Add(r);
 		do {
 			if (++iterations > 10000) {
 				throw new Exception("too many iterations");
