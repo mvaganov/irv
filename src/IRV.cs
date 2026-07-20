@@ -1,5 +1,6 @@
 ﻿using src;
 using src.Core;
+using System.ComponentModel.Design;
 namespace irv.src;
 
 using VotesPerCandidate = Dictionary<IRV.Candidate, List<IRV.Ballot>>;
@@ -46,6 +47,7 @@ public class IRV {
 
 	public class RunoffHistory {
 		public string title;
+		// TODO remove this variable?
 		public IList<Candidate>? winner;
 		/// how many votes total were recorded
 		public int numVotes;
@@ -310,12 +312,13 @@ public class IRV {
 		List<VoteBloc> blocsThisState = new List<VoteBloc>();
 		int cursor = 0;
 		for (int s = 0; s < sorted.Count; ++s) {
-			//List<Ballot> thisGuysVotes = voteState[sorted[s]];
+			int voteCount = 0;
 			if (voteState.TryGetValue(sorted[s], out List<Ballot>? thisGuyVotes) && thisGuyVotes.Count != 0) {
-				VoteBloc bloc = new VoteBloc(sorted[s], cursor, thisGuyVotes.Count);
-				blocsThisState.Add(bloc);
-				cursor += thisGuyVotes.Count;
+				voteCount = thisGuyVotes.Count;
 			}
+			VoteBloc bloc = new VoteBloc(sorted[s], cursor, voteCount);
+			blocsThisState.Add(bloc);
+			cursor += voteCount;
 		}
 		return blocsThisState;
 	}
@@ -367,57 +370,6 @@ public class IRV {
 			// if we can discover how the last vote state turned into this one
 			if (blocsLastState != null) {
 				VoteBloc.CalculateMigrations(blocsThisState, blocsLastState, candidateForExhausted, voteMigrationHistory[stateIndex - 1]);
-				//// for each block in the current state
-				//for (int c = 0; c < blocsThisState.Count; ++c) {
-				//	VoteBloc thisBloc = blocsThisState[c];
-				//	Candidate thisBlocName = thisBloc.candidate;
-				//	if (thisBlocName == candidateForExhausted) continue; // don't work on exhausted ballots
-				//	int oldBlocIndex = GetBlocIndex(thisBlocName, blocsLastState);
-				//	VoteBloc? lastBloc = null;
-				//	int delta = thisBloc.voteCount;
-				//	if (oldBlocIndex != -1) {
-				//		lastBloc = blocsLastState[oldBlocIndex];
-				//		if (lastBloc.candidate != thisBlocName) {
-				//			throw new System.Exception("we got a naming and/or searching problem...");
-				//		}
-				//		delta = thisBloc.voteCount - delta;
-				//	} else {
-				//		throw new System.Exception($"`{thisBlocName}` did not exist in previous state");
-				//	}
-				//	// if the size is the same, do an easy shift.
-				//	if (delta == 0) {
-				//		lastBloc.migrations = new List<VoteBloc.Migration>();
-				//		lastBloc.migrations.Add(new VoteBloc.Migration(thisBloc.candidate, lastBloc.voteCount, lastBloc.position, thisBloc.position));
-				//	}
-				//}
-				//// the complex shifts were not calculated in the last forloop. but they were calculated in voteMigrationHistory
-				//Dictionary<Candidate, VotesPerCandidate> thisTransition = voteMigrationHistory[stateIndex - 1];
-				//Dictionary<Candidate, int> lastStateBlocAcct = new Dictionary<Candidate, int>(); // how much is being transferred from
-				//Dictionary<Candidate, int> thisStateBlocAcct = new Dictionary<Candidate, int>(); // how much is being transferred to
-				//foreach (var k in thisTransition) { // from
-				//	VoteBloc lastBloc = blocsLastState[GetBlocIndex(k.Key, blocsLastState)];
-				//	if (!lastStateBlocAcct.TryGetValue(lastBloc.candidate, out _)) {
-				//		lastStateBlocAcct[lastBloc.candidate] = 0;
-				//	}
-				//	foreach (var n in thisTransition[k.Key]) { // to
-				//		int blocIndex = GetBlocIndex(n.Key, blocsLastState);
-				//		VoteBloc thisBloc = blocsThisState[blocIndex];
-				//		if (!thisStateBlocAcct.TryGetValue(thisBloc.candidate, out _)) {
-				//			VoteBloc? lastThisBloc = (blocIndex >= 0) ? blocsLastState[blocIndex] : null;
-				//			if (lastThisBloc != null) {
-				//				thisStateBlocAcct[thisBloc.candidate] = lastThisBloc.voteCount;
-				//			} else {
-				//				thisStateBlocAcct[thisBloc.candidate] = 0;
-				//			}
-				//		}
-				//		List<Ballot> movingVotes = n.Value;
-				//		if (lastBloc.migrations == null) lastBloc.migrations = new List<VoteBloc.Migration>();
-				//		lastBloc.migrations.Add(new VoteBloc.Migration(thisBloc.candidate, movingVotes.Count,
-				//			lastBloc.position + lastStateBlocAcct[lastBloc.candidate], thisBloc.position + thisStateBlocAcct[thisBloc.candidate]));
-				//		lastStateBlocAcct[lastBloc.candidate] = lastStateBlocAcct[lastBloc.candidate] + movingVotes.Count;
-				//		thisStateBlocAcct[thisBloc.candidate] = thisStateBlocAcct[thisBloc.candidate] + movingVotes.Count;
-				//	}
-				//}
 			}
 			blocsLastState = blocsThisState;
 		}
@@ -514,7 +466,7 @@ public class IRV {
 	//	return OMU.Serializer.Stringify(obj, indentation);
 	//}
 
-	public static IEnumerator<Response> Calc(List<Ballot> allBallots, int maxWinnersCalculated = -1) {
+	public static IEnumerator<Response> Calc(List<Ballot> allBallots, int maxWinnersCalculated = -1, float pluralityPercentage = 1) {
 		List<Ballot> originalBallots = allBallots; // reverence to source data. originalBallots may be marked up.
 		allBallots = new List<Ballot>(originalBallots);
 		// if anyone voted more than once...
@@ -531,8 +483,9 @@ public class IRV {
 		IRV_ColorAssignment(candidates, new List<Color>(s_IRV_colorList));
 		candidates.Insert(0, candidateForExhaustedBallots);
 
+		List<RankedChoiceElectionResultsStepByStep>? elections = null;
 		IEnumerator<Response> calcIteration() {
-			List<RunoffHistory> results = new List<RunoffHistory>(); // detailed results: {r:Number (rank),C:String||Array (winning candidates),v:Number (vote count),showme:String (how the results were developed visual)
+			//List<RunoffHistory> results = new List<RunoffHistory>(); // detailed results: {r:Number (rank),C:String||Array (winning candidates),v:Number (vote count),showme:String (how the results were developed visual)
 			for (int place = 0; maxWinnersCalculated < 0 || place < maxWinnersCalculated; ++place) {
 				//int place = 0; // keeps track of which rank is being calculated right now
 				// start with the winners from the system. they can't win again.
@@ -542,9 +495,8 @@ public class IRV {
 				// array of rounds, each round has an array of shifts, each shift is an array with the voter ID and the choice.
 				//List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory;
 
-				List<RankedChoiceElectionResultsStepByStep>? elections = null;
 				// do process!
-				IEnumerator<Response> iter = RankedVoteProcessing(exhastedCandidates, allBallots, candidateForExhaustedBallots);
+				IEnumerator<Response> iter = RankedVoteProcessing(exhastedCandidates, allBallots, candidateForExhaustedBallots, pluralityPercentage);
 				while (iter.MoveNext()) {
 					elections = iter.Current.Message as List<RankedChoiceElectionResultsStepByStep>;
 					yield return iter.Current;
@@ -574,22 +526,23 @@ public class IRV {
 					// IRV_out(place+ "> "+best.winner);
 					serialized.title = $"rank {place}";
 					serialized.winner = elections[i].winner;
+					elections[i].serialized = serialized;
 					//best.rank = place;
 					//best.showme = serialized;
-					results.Add(serialized);
+					//results.Add(serialized);
 					if (serialized.winner != null) {
-						place += serialized.winner.Count - 1; // the -1 is because place gets an automatic ++ in the main loop
+						//place += 1;// serialized.winner.Count - 1; // the -1 is because place gets an automatic ++ in the main loop
 						winners.AddRange(serialized.winner); //winners = winners.concat(best.winner);
 					}
 				}
-				place++;
+				//place++;
 				if (maxWinnersCalculated < 0 || place < maxWinnersCalculated) {
-					yield return Response.Processing(results);
+					yield return Response.Processing(elections);
 				} else {
 					break;
 				}
 			}
-			yield return Response.Success(results);
+			yield return Response.Success(elections);
 		}
 		IEnumerator<Response> iterator = calcIteration();
 		while (iterator.MoveNext()) {
@@ -699,6 +652,8 @@ public class IRV {
 		public List<Dictionary<Candidate, VotesPerCandidate>> out_voteMigrationHistory;
 		public List<Ballot> exhaustedBallots = new List<Ballot>();
 		public IList<Candidate>? winner;
+		public RunoffHistory serialized;
+
 		public VotesPerCandidate LatestState => out_voteState[out_voteState.Count - 1];
 		public RankedChoiceElectionResultsStepByStep() {
 			exhaustedCandidates = new HashSet<Candidate>();
@@ -812,10 +767,11 @@ public class IRV {
 					election = r;
 				} else {
 					election = new RankedChoiceElectionResultsStepByStep(r);
+					//election.out_voteState.RemoveAt(election.out_voteState.Count - 1);
 					electionsToProcess.Add(election);
 				}
 				election.DuplicateLatestState();
-				election.ExhaustCandidate(r.LatestState, losers[i], candidateForExhaustedBallots);
+				election.ExhaustCandidate(election.LatestState, losers[i], candidateForExhaustedBallots);
 				yield return Response.Processing(electionsToProcess);
 			}
 		} while (processedElection < electionsToProcess.Count);
@@ -1072,51 +1028,79 @@ public class IRV {
 	public static void Start() {
 		List<Ballot> votes = new List<Ballot>();
 		int randomlyGenerateTest = 100;
-		if (randomlyGenerateTest > 0) {
-			List<Candidate> candidates = new List<Candidate>();
-			candidates.Add(new Candidate("Mr. V", Color.cyan));
-			candidates.Add(new Candidate("Professor V"));
-			candidates.Add(new Candidate("Vaganov"));
-			candidates.Add(new Candidate("V", Color.red));
-			candidates.Add(new Candidate("Sensei"));
-			candidates.Add(new Candidate("Cheif"));
-			candidates.Add(new Candidate("Chort"));
-			candidates.Add(new Candidate("Nunov"));
-			candidates.Add(new Candidate("Glokglok"));
-			candidates.Add(new Candidate("Naltron"));
-			candidates.Add(new Candidate("Dunhab"));
-			for (int i = 0; i < randomlyGenerateTest; ++i) {
-				int picks = (int)(Rand.Number * Rand.Number * (candidates.Count - 1) + 2);
-				picks = (int)Math.Min(picks, candidates.Count);
-				Candidate[] ranked = new Candidate[picks];
-				for (int r = 0; r < ranked.Length; ++r) {
-					int pick;
-					do {
-						pick = (int)(Rand.Number * Rand.Number * (candidates.Count));
-					} while (System.Array.IndexOf(ranked, candidates[pick]) >= 0);
-					ranked[r] = candidates[pick];
-				}
-				Ballot v = new Ballot();
-				v.id = "rand" + i.ToString();
-				v.vote = ranked;
-				votes.Add(v);
+		List<Candidate> candidates = new List<Candidate>();
+		candidates.Add(new Candidate("Mr. V", Color.cyan));
+		candidates.Add(new Candidate("Professor V"));
+		candidates.Add(new Candidate("Vaganov"));
+		candidates.Add(new Candidate("V", Color.red));
+		candidates.Add(new Candidate("Sensei"));
+		candidates.Add(new Candidate("Cheif"));
+		candidates.Add(new Candidate("Chort"));
+		candidates.Add(new Candidate("Nunov"));
+		candidates.Add(new Candidate("Glokglok"));
+		candidates.Add(new Candidate("Naltron"));
+		candidates.Add(new Candidate("Dunhab"));
+		for (int i = 0; i < randomlyGenerateTest; ++i) {
+			int picks = (int)(Rand.Number * Rand.Number * (candidates.Count - 1) + 2);
+			picks = (int)Math.Min(picks, candidates.Count);
+			Candidate[] ranked = new Candidate[picks];
+			for (int r = 0; r < ranked.Length; ++r) {
+				int pick;
+				do {
+					pick = (int)(Rand.Number * Rand.Number * (candidates.Count));
+				} while (System.Array.IndexOf(ranked, candidates[pick]) >= 0);
+				ranked[r] = candidates[pick];
 			}
-			for(int i = 0; i < votes.Count; ++i) {
-				Log.WriteLine(votes[i]);
-			}
-			//IRV_calc(votes, transform, -1, (List<RunoffResult> results) => {
-			//	MakeVisualization(results);
-			//});
-			IEnumerator<Response> iter = IRV.Calc(votes);
-			uint last = Rand.Timestamp;
-			while (iter.MoveNext()) {
-				uint now = Rand.Timestamp;
-				int passed = (int)(now - last);
-				object? messsge = iter.Current.Message;
-				string typeLabel = messsge?.GetType().Name ?? "null";
-				Log.WriteLine($"{passed} {iter.Current.CommandState} {typeLabel}");
-			}
+			Ballot v = new Ballot();
+			v.id = "rand" + i.ToString();
+			v.vote = ranked;
+			votes.Add(v);
 		}
+		for(int i = 0; i < votes.Count; ++i) {
+			Log.WriteLine(votes[i]);
+		}
+		//IRV_calc(votes, transform, -1, (List<RunoffResult> results) => {
+		//	MakeVisualization(results);
+		//});
+		IEnumerator<Response> iter = IRV.Calc(votes);
+		uint last = Rand.Timestamp;
+		while (iter.MoveNext()) {
+			uint now = Rand.Timestamp;
+			int passed = (int)(now - last);
+			object? messsge = iter.Current.Message;
+			string typeLabel = messsge?.GetType().Name ?? "null";
+			List<RankedChoiceElectionResultsStepByStep>? allData = messsge as List<RankedChoiceElectionResultsStepByStep>;
+			if (allData != null) {
+				typeLabel += $"[{allData.Count}]";
+				for(int e = 0; e < allData.Count; ++e) {
+					RankedChoiceElectionResultsStepByStep election = allData[e];
+					if (election.serialized == null) continue;
+					Log.WriteLine(election.serialized.notes);
+					List<List<VoteBloc>> allStates = election.serialized.data;
+					for (int i = 0; i < allStates.Count; ++i) {
+						List<VoteBloc> state = allStates[i];
+						int index = 0;
+						for (int b = 0; b < state.Count; ++b) {
+							if (index != state[b].position) {
+								Log.Write("_");
+							}
+							for (int w = 0; w < state[b].voteCount; ++w) {
+								if (w < state[b].candidate.name.Length) {
+									Console.Write(state[b].candidate.name[w]);
+								} else {
+									Console.Write((char)('0' + b));
+								}
+								++index;
+							}
+						}
+						Console.WriteLine();
+					}
+					Console.WriteLine("------------------");
+				}
+			}
+			Log.WriteLine($"{passed} {iter.Current.CommandState} {typeLabel}");
+		}
+
 	}
 
 	//void MakeVisualization(List<RunoffResult> r) {

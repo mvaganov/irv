@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace irv.src;
+﻿namespace irv.src;
 public struct Color {
 	public byte r, g, b, a;
 	public Color(uint color) {
