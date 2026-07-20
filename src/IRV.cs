@@ -1,9 +1,5 @@
 ﻿using src;
 using src.Core;
-using System.Collections;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
 namespace irv.src;
 
 using VotesPerCandidate = Dictionary<IRV.Candidate, List<IRV.Ballot>>;
@@ -92,6 +88,7 @@ public class IRV {
 		public VoteBloc(Candidate candidate, int start, int votes) {
 			this.candidate = candidate; this.position = start; this.voteCount = votes; this.migrations = null;
 		}
+
 		public static void CalculateMigrations(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted,
 			Dictionary<Candidate, VotesPerCandidate> voteMigration) {
 			for (int c = 0; c < blocsThisState.Count; ++c) {
@@ -108,10 +105,17 @@ public class IRV {
 					}
 					delta = thisBloc.voteCount - delta;
 				} else {
-					throw new System.Exception($"`{thisBlocName}` did not exist in previous state");
+					//int lastNonExhaustedBloc = blocsLastState.Count-1;
+					//if (blocsLastState[lastNonExhaustedBloc].candidate == candidateForExhausted) {
+					//	--lastNonExhaustedBloc;
+					//}
+					//int location = lastNonExhaustedBloc == 0 ? 0 : blocsLastState[lastNonExhaustedBloc].position + blocsLastState[lastNonExhaustedBloc].voteCount;
+					//lastBloc = new VoteBloc(thisBlocName, location, 0);
+
+					//throw new System.Exception($"`{thisBlocName}` did not exist in previous state");
 				}
 				// if the size is the same, do an easy shift.
-				if (delta == 0) {
+				if (delta == 0 && lastBloc != null) {
 					lastBloc.migrations = new List<Migration>();
 					lastBloc.migrations.Add(new Migration(thisBloc.candidate, lastBloc.voteCount, lastBloc.position, thisBloc.position));
 				}
@@ -137,8 +141,8 @@ public class IRV {
 						}
 					}
 					List<Ballot> movingVotes = n.Value;
-					if (lastBloc.migrations == null) lastBloc.migrations = new List<VoteBloc.Migration>();
-					lastBloc.migrations.Add(new VoteBloc.Migration(thisBloc.candidate, movingVotes.Count,
+					if (lastBloc.migrations == null) lastBloc.migrations = new List<Migration>();
+					lastBloc.migrations.Add(new Migration(thisBloc.candidate, movingVotes.Count,
 						lastBloc.position + lastStateBlocAcct[lastBloc.candidate], thisBloc.position + thisStateBlocAcct[thisBloc.candidate]));
 					lastStateBlocAcct[lastBloc.candidate] = lastStateBlocAcct[lastBloc.candidate] + movingVotes.Count;
 					thisStateBlocAcct[thisBloc.candidate] = thisStateBlocAcct[thisBloc.candidate] + movingVotes.Count;
@@ -555,6 +559,7 @@ public class IRV {
 				//			Debug.Log(Stringify(voteStateHistory));
 				//			Debug.Log(Stringify(voteMigrationHistory));
 				for (int i = 0; elections != null && i < elections.Count; ++i) {
+					Log.d($"calculating visuals for election[{i}]");
 					//if (best != null) {
 					// array of voting blocs {candidate:id, indexRange:[#,#], color:"#XXXXXX", votes:[]}
 					List<List<VoteBloc>> visBlocs = new List<List<VoteBloc>>();
@@ -732,12 +737,17 @@ public class IRV {
 			}
 			Log.w($"exhausting {candidate} {votes.Count}");
 			state.Remove(candidate);
+			Dictionary<Candidate, VotesPerCandidate> changesThisTime = new Dictionary<Candidate, VotesPerCandidate>();
+			VotesPerCandidate votesMoveTo = new VotesPerCandidate();
+			changesThisTime[candidate] = votesMoveTo;
+			out_voteMigrationHistory.Add(changesThisTime);
 			for (int i = 0; i < votes.Count; ++i) {
 				Ballot ballot = votes[i];
 				Candidate? next = ballot.GetBestChoice(exhaustedCandidates);
 				if (next == null) {
 					exhaustedBallots.Add(ballot);
 					if (candidateForExhausted != null) {
+						next = candidateForExhausted;
 						if (!state.TryGetValue(candidateForExhausted, out List<Ballot>? exhuastedBallots)) {
 							state[candidateForExhausted] = exhuastedBallots = new List<Ballot>();
 						}
@@ -749,6 +759,12 @@ public class IRV {
 						state[next] = ballots = new List<Ballot>();
 					}
 					ballots.Add(ballot);
+				}
+				if (next != null) {
+					if (!votesMoveTo.TryGetValue(next, out List<Ballot>? movedTo)) {
+						votesMoveTo[next] = movedTo = new List<Ballot>();
+					}
+					movedTo.Add(ballot);
 				}
 			}
 			return exhaustedBallots;
