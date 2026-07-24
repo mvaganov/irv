@@ -181,9 +181,9 @@ public static class Log {
 		return text;
 	}
 	public static void Write(string text) {
+		ConsoleColor defaultColor = Console.ForegroundColor;
 		text = Format(text);
 		int start = 0, end;
-		ConsoleColor defaultColor = Console.ForegroundColor;
 		char c = '\0';
 		while (start < text.Length) {
 			end = text.Length;

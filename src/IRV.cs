@@ -1,6 +1,7 @@
 ﻿using src;
 using src.Core;
 using System.ComponentModel.Design;
+using System.Text;
 namespace irv.src;
 
 using VotesPerCandidate = Dictionary<IRV.Candidate, List<IRV.Ballot>>;
@@ -456,13 +457,20 @@ public class IRV {
 	//}
 
 	/// <returns>list of Candidates by weight, which is used for tie-breaking when multiple candidates are about to be removed</returns>
-	static List<Candidate> IRV_weightedVoteCalc(List<Ballot> ballots) {
+	static List<Candidate> IRV_weightedVoteCalc(List<Ballot> ballots, Dictionary<Candidate, int> totalVotes) {
 		// calculate a weighted score, and total-vote-count, which are simpler algorithms than Instant Runoff Voting
 		HashSet<Candidate> completeSet = new HashSet<Candidate>();
 		for (int v = 0; v < ballots.Count; ++v) {
-			Candidate[] voterRanking = ballots[v].vote;
-			for (int i = 0; i < voterRanking.Length; ++i) {
-				Candidate candidate = voterRanking[i];
+			Candidate[]? ballot = ballots[v].vote;
+			if (ballot == null) continue;
+			for (int i = 0; i < ballot.Length; ++i) {
+				Candidate candidate = ballot[i];
+				if (totalVotes != null) {
+					if (!totalVotes.TryGetValue(candidate, out int votes)) {
+						votes = 0;
+					}
+					totalVotes[candidate] = votes + 1;
+				}
 				completeSet.Add(candidate);
 				candidate.totalVotes++;
 				// first-pick adds 1 point. 2nd pick adds 1/2 a point. 3rd pick 1/3, 4th pick 1/4, 5 pick 1/5, ...
@@ -493,13 +501,16 @@ public class IRV {
 			yield return Response.Error($"`{votedMoreThanOnce}` voted more than once.");
 			yield break;
 		}
-		List<Candidate> candidates = IRV_weightedVoteCalc(allBallots); // do a simple guess of who will win using a weighted vote algorithm
-		List<Candidate> winners = new List<Candidate>(); // simple list of candidates who have won
+		Dictionary<Candidate, int> totalVotes = new Dictionary<Candidate, int>();
+		List<Candidate> candidates = IRV_weightedVoteCalc(allBallots, totalVotes); // do a simple guess of who will win using a weighted vote algorithm
+		Candidate[] likelyOrder = totalVotes.Keys.ToArray();
+		Array.Sort(likelyOrder, (a, b) => totalVotes[b] - totalVotes[a]);
 
 		Candidate candidateForExhaustedBallots = GenerateExhaustedCandidatePlaceholder(candidates);
 		IRV_ColorAssignment(candidates, new List<Color>(s_IRV_colorList));
 		candidates.Insert(0, candidateForExhaustedBallots);
 
+		List<Candidate> winners = new List<Candidate>(); // simple list of candidates who have won
 		List<RankedChoiceElectionResultsStepByStep>? elections = null;
 		IEnumerator<Response> calcIteration() {
 			//List<RunoffHistory> results = new List<RunoffHistory>(); // detailed results: {r:Number (rank),C:String||Array (winning candidates),v:Number (vote count),showme:String (how the results were developed visual)
@@ -513,7 +524,7 @@ public class IRV {
 				//List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory;
 
 				// do process!
-				IEnumerator<Response> iter = RankedVoteProcessing(exhastedCandidates, allBallots, candidateForExhaustedBallots, pluralityPercentage);
+				IEnumerator<Response> iter = RankedVoteProcessing(exhastedCandidates, allBallots, candidateForExhaustedBallots, likelyOrder, totalVotes, pluralityPercentage);
 				while (iter.MoveNext()) {
 					elections = iter.Current.Message as List<RankedChoiceElectionResultsStepByStep>;
 					yield return iter.Current;
@@ -619,22 +630,21 @@ public class IRV {
 		public void DuplicateLatestState() {
 			out_voteState.Add(CloneVotesPerCandidate(LatestState));
 		}
-		public bool CalculateWinner(Candidate? candidateForExhausted, float pluralityPercentage) {
-			winner = MajorityCandidates(LatestState, candidateForExhausted, pluralityPercentage);
+		public bool CalculateWinner(Candidate? candidateForExhausted, float pluralityPercentage, out int voteCount) {
+			winner = MajorityCandidates(LatestState, candidateForExhausted, out voteCount, pluralityPercentage);
 			bool hasWinner = winner?.Count > 0;
-			if (hasWinner && winner != null) {
-				Log.d(string.Join(", ", winner));
-			}
 			return hasWinner;
 		}
 		public List<Ballot> ExhaustCandidate(VotesPerCandidate state, Candidate candidate, Candidate? candidateForExhausted) {
 			exhaustedCandidates.Add(candidate);
 			List<Ballot> exhaustedBallots = new List<Ballot>();
 			if (!state.TryGetValue(candidate, out List<Ballot>? votes)) {
-				throw new Exception($"`{candidate.name}` missing from current state?");
+				//return null;
+				//throw new Exception($"`{candidate.name}` missing from current state?");
+				votes = new List<Ballot>();
+			} else {
+				state.Remove(candidate);
 			}
-			Log.w($"exhausting {candidate} {votes.Count}");
-			state.Remove(candidate);
 			Dictionary<Candidate, VotesPerCandidate> changesThisTime = new Dictionary<Candidate, VotesPerCandidate>();
 			VotesPerCandidate votesMoveTo = new VotesPerCandidate();
 			changesThisTime[candidate] = votesMoveTo;
@@ -673,7 +683,13 @@ public class IRV {
 		}
 	}
 
-	static IEnumerator<Response> RankedVoteProcessing(HashSet<Candidate> exhastedCandidates, List<Ballot> allBallots, Candidate candidateForExhaustedBallots, float pluralityPercentage = 0.5f) {
+	static IEnumerator<Response> RankedVoteProcessing(
+		HashSet<Candidate> exhastedCandidates,
+		List<Ballot> allBallots,
+		Candidate candidateForExhaustedBallots,
+		Candidate[] likelyOrder,
+		Dictionary<Candidate,int> totalUnrankedVotes,
+		float pluralityPercentage = 0.5f) {
 		int iterations = 0;
 		int processedElection = 0;
 		List<RankedChoiceElectionResultsStepByStep> electionsToProcess = new List<RankedChoiceElectionResultsStepByStep>();
@@ -685,11 +701,12 @@ public class IRV {
 			yield break;
 		}
 		electionsToProcess.Add(r);
+		//int losersPulledOut = 0;
 		do {
 			if (++iterations > 10000) {
 				throw new Exception("too many iterations");
 			}
-			if (r.CalculateWinner(candidateForExhaustedBallots, pluralityPercentage) || r.IsExhausted(candidateForExhaustedBallots)) {
+			if (r.CalculateWinner(candidateForExhaustedBallots, pluralityPercentage, out int voteCount) || r.IsExhausted(candidateForExhaustedBallots)) {
 				yield return Response.Processing(electionsToProcess);
 				if (++processedElection >= electionsToProcess.Count) {
 					break;
@@ -699,7 +716,17 @@ public class IRV {
 				}
 			}
 			CountVoteExtremes(r.LatestState, out int leastVotes, out int mostVotes, candidateForExhaustedBallots);
-			List<Candidate> losers = GetLosers(r.LatestState, leastVotes, candidateForExhaustedBallots);
+			int futureVoteCountEstimate = 0;
+			for (int i = 0; i < likelyOrder.Length; ++i) {
+				if (!exhastedCandidates.Contains(likelyOrder[i])) {
+					futureVoteCountEstimate = totalUnrankedVotes[likelyOrder[i]];
+					break;
+				}
+			}
+			// before doing the standard remove-the-current-loser logic, clear out the extremely weak candidates that could never win
+			if (!GetExtremelyWeakCandidates(r.LatestState, futureVoteCountEstimate, pluralityPercentage, likelyOrder, totalUnrankedVotes, out List<Candidate>? losers)) {
+				losers = GetLosers(r.LatestState, leastVotes, candidateForExhaustedBallots);
+			}
 			losers.Sort((a, b) => { return a.totalVotes != b.totalVotes ? a.totalVotes.CompareTo(b.totalVotes) : a.tieWeight.CompareTo(b.tieWeight); });
 			if (losers.Count > 1) {
 				Log.WriteLine($"tie for worst: {string.Join(", ", losers)}\n");
@@ -721,6 +748,32 @@ public class IRV {
 		} while (processedElection < electionsToProcess.Count);
 		yield return Response.Success(electionsToProcess);
 	}
+	public static bool GetExtremelyWeakCandidates(VotesPerCandidate state, int voteCount, float pluralityPercentage, Candidate[] likelyOrder,
+		Dictionary<Candidate,int> totalUnrankedVotes, out List<Candidate>? losers) {
+		int minRequiredToWin = (int)(voteCount * pluralityPercentage);
+		HashSet<Candidate> extremelyWeakCandidates = new HashSet<Candidate>();
+		foreach (var kvp in state) {
+			if (totalUnrankedVotes.TryGetValue(kvp.Key, out int votesForCandidate) && votesForCandidate < minRequiredToWin) {
+				extremelyWeakCandidates.Add(kvp.Key);
+			}
+		}
+		if (extremelyWeakCandidates.Count == 0) {
+			losers = null;
+			return false;
+		}
+		losers = new List<Candidate>();
+		for (int i = likelyOrder.Length - 1; i >= 0; --i) {
+			if (extremelyWeakCandidates.Contains(likelyOrder[i])) {
+				int cursedVoteCount = totalUnrankedVotes[likelyOrder[i]];
+				losers.Add(likelyOrder[i]);
+				while (--i >= 0 && extremelyWeakCandidates.Contains(likelyOrder[i]) && totalUnrankedVotes[likelyOrder[i]] == cursedVoteCount) {
+					losers.Add(likelyOrder[i]);
+				}
+				return true;
+			}
+		}
+		return false;
+	}
 	public static List<Candidate> GetLosers(VotesPerCandidate tally, int leastVotes, Candidate fullyExhausted) {
 		List<Candidate> losers = new List<Candidate>();
 		foreach (var k in tally) {
@@ -732,11 +785,11 @@ public class IRV {
 		}
 		return losers;
 	}
-	public static void CountVoteExtremes(VotesPerCandidate tally, out int leastVotes, out int mostVotes, Candidate fullyExhausted) {
+	public static void CountVoteExtremes(VotesPerCandidate tally, out int leastVotes, out int mostVotes, Candidate candidateForExhaustedVotes) {
 		leastVotes = int.MaxValue;
 		mostVotes = 0;
 		foreach (var k in tally) {
-			if (k.Key == fullyExhausted) continue;
+			if (k.Key == candidateForExhaustedVotes) continue;
 			int len = k.Value.Count;
 			if (len > 0) {
 				if (len < leastVotes) { leastVotes = len; }
@@ -745,17 +798,17 @@ public class IRV {
 		}
 	}
 
-	public static int SumUnexhaustedVotes(VotesPerCandidate tally, Candidate? fullyExhausted) {
+	public static int SumUnexhaustedVotes(VotesPerCandidate tally, Candidate? candidateForExhaustedVotes) {
 		int sumVotes = 0;
 		foreach (var k in tally) {
-			if (k.Key == fullyExhausted) continue;
+			if (k.Key == candidateForExhaustedVotes) continue;
 			sumVotes += k.Value.Count;
 		}
 		return sumVotes;
 	}
 
-	public static IList<Candidate>? MajorityCandidates(VotesPerCandidate tally, Candidate? fullyExhausted, float pluralityPercentage = 0.5f) {
-		int voteCount = SumUnexhaustedVotes(tally, fullyExhausted);
+	public static IList<Candidate>? MajorityCandidates(VotesPerCandidate tally, Candidate? fullyExhausted, out int voteCount, float pluralityPercentage = 0.5f) {
+		voteCount = SumUnexhaustedVotes(tally, fullyExhausted);
 		if (voteCount == 0) { return null; }
 		List<Candidate>? winners = null;
 		int majority = (int)(voteCount * pluralityPercentage);
@@ -808,7 +861,11 @@ public class IRV {
 			for (int r = 0; r < ranked.Length; ++r) {
 				int pick;
 				do {
-					pick = (int)(Rand.Number * Rand.Number * (candidates.Count));
+					if (r < ranked.Length / 2) {
+						pick = (int)(Rand.Number * (candidates.Count));
+					} else {
+						pick = (int)(Rand.Number * Rand.Number * (candidates.Count));
+					}
 				} while (System.Array.IndexOf(ranked, candidates[pick]) >= 0);
 				ranked[r] = candidates[pick];
 			}
@@ -825,6 +882,7 @@ public class IRV {
 		//});
 		IEnumerator<Response> iter = IRV.Calc(votes);
 		uint last = Rand.Timestamp;
+		ConsoleColor[] colors = new ConsoleColor[] { ConsoleColor.Red, ConsoleColor.Green, ConsoleColor.Blue, ConsoleColor.Yellow, ConsoleColor.Magenta, ConsoleColor.Cyan };
 		while (iter.MoveNext()) {
 			uint now = Rand.Timestamp;
 			int passed = (int)(now - last);
@@ -842,20 +900,19 @@ public class IRV {
 						List<VoteBloc> state = allStates[i];
 						int index = 0;
 						// draw state
+						StringBuilder sb = new StringBuilder();
 						for (int b = 0; b < state.Count; ++b) {
-							if (index != state[b].position) {
-								Log.Write("_");
-							}
+							sb.Append(Log.ColorCode(colors[b % colors.Length]));
 							for (int w = 0; w < state[b].voteCount; ++w) {
 								if (w < state[b].candidate.name.Length) {
-									Console.Write(state[b].candidate.name[w]);
+									sb.Append(state[b].candidate.name[w]);
 								} else {
-									Console.Write((char)('0' + b));
+									sb.Append((char)('.'));
 								}
 								++index;
 							}
 						}
-						Console.WriteLine();
+						Log.WriteLine(sb.ToString());
 						// draw moves
 						char[] bufferFrom = new char[index];
 						char[] bufferTo = new char[index];
@@ -875,7 +932,7 @@ public class IRV {
 						Console.WriteLine(new string(bufferFrom));
 						Console.WriteLine(new string(bufferTo));
 					}
-					Console.WriteLine("------------------");
+					Console.WriteLine("------------------ winner: "+string.Join(", ", election.winner));
 				}
 			}
 			Log.WriteLine($"{passed} {iter.Current.CommandState} {typeLabel}");
