@@ -90,46 +90,13 @@ public class IRV {
 		public VoteBloc(Candidate candidate, int start, int votes) {
 			this.candidate = candidate; this.position = start; this.voteCount = votes;
 		}
-		public void PutMigrationsInOrder(Dictionary<Candidate, int> order) {
-			if (migrations == null) return;
-			int startIndex = int.MaxValue;
-			for (int i = 0; i < migrations.Count; ++i) {
-				if (migrations[i].fromPosition < startIndex) { startIndex = migrations[i].fromPosition; }
-			}
-			int cursor = startIndex;
-			migrations.Sort((a, b) => {
-				if (!order.TryGetValue(a.newBoss, out int aVal)) { aVal = order.Count; }
-				if (!order.TryGetValue(b.newBoss, out int bVal)) { bVal = order.Count; }
-				return aVal - bVal;
-			});
-			for (int i = 0; i < migrations.Count; ++i) {
-				migrations[i].fromPosition = cursor;
-				if (cursor > 100) {
-					Log.w("why?");
-				}
-				cursor += migrations[i].voteCount;
-			}
-		}
+		
 		public static void CalculateMigrations(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted,
 			Dictionary<Candidate, VotesPerCandidate> voteMigration) {
-			List<Candidate> properOrderOfCandidatesInState = new List<Candidate>();
-			HashSet<Candidate> listed = new HashSet<Candidate>();
-			for (int i = 0; i < blocsLastState.Count; ++i) {
-				Candidate c = blocsLastState[i].candidate; properOrderOfCandidatesInState.Add(c); listed.Add(c);
-			}
-			for (int i = 0; i < blocsThisState.Count; ++i) {
-				Candidate c = blocsLastState[i].candidate;
-				if (!listed.Contains(c)) { properOrderOfCandidatesInState.Add(c); }
-			}
-			if (candidateForExhausted != null) {
-				int index = properOrderOfCandidatesInState.IndexOf(candidateForExhausted);
-				if (index >= 0) {
-					properOrderOfCandidatesInState.RemoveAt(index);
-					properOrderOfCandidatesInState.Add(candidateForExhausted);
-				}
-			}
-			Dictionary<Candidate, int> indexOfVotesMovedFromLastBloc = new Dictionary<Candidate, int>();
-			Dictionary<Candidate, int> indexOfVotesMovedToThisBloc = new Dictionary<Candidate, int>();
+			List<Candidate> properOrderOfCandidatesInState = CalculateProperOrderOfAllCandidatesBetweenTwoStates(blocsThisState, blocsLastState, candidateForExhausted);
+			// voters are in a line, where in the line are the votes coming and going? calculate for each candidate.
+			Dictionary<Candidate, int> whereVotesComeFrom = new Dictionary<Candidate, int>();
+			Dictionary<Candidate, int> whereVotesGoingTo = new Dictionary<Candidate, int>();
 			for (int i = 0; i < properOrderOfCandidatesInState.Count; ++i) {
 				Candidate candidate = properOrderOfCandidatesInState[i];
 				if (candidate == null) continue;
@@ -146,8 +113,8 @@ public class IRV {
 					lastBloc.migrations.Add(new Migration(candidate, thisBloc.voteCount, lastBloc.position, thisBloc.position));
 					continue;
 				}
-				if (!indexOfVotesMovedFromLastBloc.TryGetValue(candidate, out _)) {
-					indexOfVotesMovedFromLastBloc[candidate] = lastBloc.position;
+				if (!whereVotesComeFrom.TryGetValue(candidate, out _)) {
+					whereVotesComeFrom[candidate] = lastBloc.position;
 				}
 				if (!voteMigration.TryGetValue(candidate, out VotesPerCandidate? whereTheVotesAreGoing)) {
 					continue;
@@ -163,23 +130,47 @@ public class IRV {
 						throw new Exception($"`{whoGetsMeNow}` is not in the present state?");
 					}
 					VoteBloc nextBloc = blocsThisState[blocIndexTargetThisState];
-					if (!indexOfVotesMovedToThisBloc.TryGetValue(nextBloc.candidate, out _)) {
+					if (!whereVotesGoingTo.TryGetValue(nextBloc.candidate, out _)) {
 						int blocIndexLastState = GetBlocIndex(whoGetsMeNow, blocsLastState);
 						VoteBloc? nextBlocLastState = (blocIndexLastState >= 0) ? blocsLastState[blocIndexLastState] : null;
 						if (nextBlocLastState != null) {
-							indexOfVotesMovedToThisBloc[nextBloc.candidate] = nextBloc.position + nextBlocLastState.voteCount;
+							whereVotesGoingTo[nextBloc.candidate] = nextBloc.position + nextBlocLastState.voteCount;
 						} else {
-							indexOfVotesMovedToThisBloc[nextBloc.candidate] = nextBloc.position;
+							whereVotesGoingTo[nextBloc.candidate] = nextBloc.position;
 						}
 					}
 					if (lastBloc.migrations == null) lastBloc.migrations = new List<Migration>();
-					lastBloc.migrations.Add(new Migration(nextBloc.candidate, movingVotes.Count,
-						indexOfVotesMovedFromLastBloc[lastBloc.candidate], indexOfVotesMovedToThisBloc[nextBloc.candidate]));
-					indexOfVotesMovedFromLastBloc[lastBloc.candidate] = indexOfVotesMovedFromLastBloc[lastBloc.candidate] + movingVotes.Count;
-					indexOfVotesMovedToThisBloc[nextBloc.candidate] = indexOfVotesMovedToThisBloc[nextBloc.candidate] + movingVotes.Count;
+					Candidate thisLoser = lastBloc.candidate;
+					Candidate theNextGuy = nextBloc.candidate;
+					int votesCameFrom = whereVotesComeFrom[thisLoser];
+					int votesGoingTo = whereVotesGoingTo[theNextGuy];
+					lastBloc.migrations.Add(new Migration(theNextGuy, movingVotes.Count, votesCameFrom, votesGoingTo));
+					whereVotesComeFrom[thisLoser] = votesCameFrom + movingVotes.Count;
+					whereVotesGoingTo[theNextGuy] = votesGoingTo + movingVotes.Count;
 					votesMoved += movingVotes.Count;
 				}
 			}
+		}
+		private static List<Candidate> CalculateProperOrderOfAllCandidatesBetweenTwoStates(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted) {
+			List<Candidate> properOrderOfCandidates = new List<Candidate>();
+			HashSet<Candidate> listed = new HashSet<Candidate>();
+			for (int i = 0; i < blocsLastState.Count; ++i) {
+				Candidate c = blocsLastState[i].candidate;
+				properOrderOfCandidates.Add(c);
+				listed.Add(c);
+			}
+			for (int i = 0; i < blocsThisState.Count; ++i) {
+				Candidate c = blocsLastState[i].candidate;
+				if (!listed.Contains(c)) { properOrderOfCandidates.Add(c); }
+			}
+			if (candidateForExhausted != null) {
+				int index = properOrderOfCandidates.IndexOf(candidateForExhausted);
+				if (index >= 0) {
+					properOrderOfCandidates.RemoveAt(index);
+					properOrderOfCandidates.Add(candidateForExhausted);
+				}
+			}
+			return properOrderOfCandidates;
 		}
 	}
 
@@ -723,7 +714,9 @@ public class IRV {
 					break;
 				}
 			}
-			// before doing the standard remove-the-current-loser logic, clear out the extremely weak candidates that could never win
+			futureVoteCountEstimate = Math.Min(futureVoteCountEstimate, voteCount);
+			// before doing the standard remove-the-current-loser logic, clear out the extremely weak candidates that could never win.
+			// eliminates the chance that statistical noise could remove an actual popular choice
 			if (!GetExtremelyWeakCandidates(r.LatestState, futureVoteCountEstimate, pluralityPercentage, likelyOrder, totalUnrankedVotes, out List<Candidate>? losers)) {
 				losers = GetLosers(r.LatestState, leastVotes, candidateForExhaustedBallots);
 			}
@@ -738,7 +731,6 @@ public class IRV {
 				} else {
 					election = new RankedChoiceElectionResultsStepByStep(r);
 					election.note += "drop " + losers[i];
-					//election.out_voteState.RemoveAt(election.out_voteState.Count - 1);
 					electionsToProcess.Add(election);
 				}
 				election.DuplicateLatestState();
