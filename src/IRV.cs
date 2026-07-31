@@ -1,6 +1,7 @@
 ﻿using src;
 using src.Core;
 using System.ComponentModel.Design;
+using System.Drawing;
 using System.Text;
 namespace irv.src;
 
@@ -866,12 +867,7 @@ public class IRV {
 			v.vote = ranked;
 			votes.Add(v);
 		}
-		for(int i = 0; i < votes.Count; ++i) {
-			Log.WriteLine(votes[i]);
-		}
-		//IRV_calc(votes, transform, -1, (List<RunoffResult> results) => {
-		//	MakeVisualization(results);
-		//});
+		//for(int i = 0; i < votes.Count; ++i) { Log.WriteLine(votes[i]); }
 		IEnumerator<Response> iter = IRV.Calc(votes);
 		uint last = Rand.Timestamp;
 		ConsoleColor[] colors = new ConsoleColor[] { ConsoleColor.Red, ConsoleColor.Green, ConsoleColor.Blue, ConsoleColor.Yellow, ConsoleColor.Magenta, ConsoleColor.Cyan };
@@ -890,23 +886,9 @@ public class IRV {
 					List<List<VoteBloc>> allStates = election.serialized.data;
 					for (int i = 0; i < allStates.Count; ++i) {
 						List<VoteBloc> state = allStates[i];
-						int index = 0;
-						// draw state
-						StringBuilder sb = new StringBuilder();
-						for (int b = 0; b < state.Count; ++b) {
-							sb.Append(Log.ColorCode(colors[b % colors.Length]));
-							for (int w = 0; w < state[b].voteCount; ++w) {
-								if (w < state[b].candidate.name.Length) {
-									sb.Append(state[b].candidate.name[w]);
-								} else {
-									sb.Append((char)('.'));
-								}
-								++index;
-							}
-						}
-						Log.WriteLine(sb.ToString());
+						Log.WriteLine(StateToString(state, colors, out int index));
 						// draw moves
-						char[] bufferFrom = new char[index];
+						char[] bufferFrom = new char[index+20]; // find out why the exhausted blocs are starting from 100 (at the end of the population)
 						char[] bufferTo = new char[index];
 						for (int b = 0; b < index; ++b) bufferFrom[b] = bufferTo[b] = ' ';
 						for (int b = 0; b < state.Count; ++b) {
@@ -914,7 +896,7 @@ public class IRV {
 							if (bloc.migrations == null) continue;
 							for(int m = 0; m < bloc.migrations.Count; ++m) {
 								VoteBloc.Migration migration = bloc.migrations[m];
-								if (migration.newBoss == bloc.candidate) continue;
+								//if (migration.newBoss == bloc.candidate) continue;
 								for (int j = 0; j < migration.voteCount; ++j) {
 									bufferFrom[migration.fromPosition+j] = migration.newBoss.name[0];
 									bufferTo[migration.toPosition+j] = migration.newBoss.name[0];
@@ -931,4 +913,21 @@ public class IRV {
 		}
 
 	}
+	public static string StateToString(List<VoteBloc> state, ConsoleColor[] colors, out int index) {
+		index = 0;
+		StringBuilder sb = new StringBuilder();
+		for (int b = 0; b < state.Count; ++b) {
+			sb.Append(Log.ColorCode(colors[b % colors.Length]));
+			for (int w = 0; w < state[b].voteCount; ++w) {
+				if (w < state[b].candidate.name.Length) {
+					sb.Append(state[b].candidate.name[w]);
+				} else {
+					sb.Append('.');
+				}
+				++index;
+			}
+		}
+		return sb.ToString();
+	}
+
 }
