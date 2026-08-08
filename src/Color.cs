@@ -1,4 +1,6 @@
-﻿namespace irv.src;
+﻿using System.Diagnostics.CodeAnalysis;
+
+namespace irv.src;
 public struct Color {
 	public byte r, g, b, a;
 	public Color(uint color) {
@@ -7,6 +9,7 @@ public struct Color {
 		g = (byte)(color >> 8);
 		r = (byte)(color >> 0);
 	}
+	public UInt32 GetUInt32() => (UInt32)a << 24 | (UInt32)b << 16 | (UInt32)g << 8 | r;
 	public Color(float r, float g, float b, float a = 1) {
 		this.r = (byte)(r * 255);
 		this.g = (byte)(g * 255);
@@ -21,9 +24,9 @@ public struct Color {
 	public static Color yellow = 0xff00ffff;
 	public static Color cyan = 0xffffff00;
 	public static Color magenta = 0xffff00ff;
-	public bool Equals(Color c) {
-		return r == c.r && g == c.g && b == c.b && a == c.a;
-	}
+	public bool Equals(Color c) => r == c.r && g == c.g && b == c.b && a == c.a;
+	public override int GetHashCode() => (int)GetUInt32();
+	public override bool Equals([NotNullWhen(true)] object? obj) => obj is Color c && Equals(c);
 	public static bool operator ==(Color a, Color b) => a.Equals(b);
 	public static bool operator !=(Color a, Color b) => !a.Equals(b);
 }

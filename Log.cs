@@ -1,7 +1,7 @@
 ﻿#define KeepLogs
-using src.Core;
 using System.Diagnostics;
 using System.Text;
+using static System.Net.Mime.MediaTypeNames;
 namespace src;
 
 public static class Log {
@@ -61,10 +61,6 @@ public static class Log {
 			new Visibility(Code.SuccessfulAsserts, ConsoleColor.DarkMagenta),
 		};
 	}
-	private static StackableVariableStore VariableContext = new StackableVariableStore();
-	public static string GetValue(string key) => VariableContext.TryGetValue(key, out object? value) ? value?.ToString() ?? string.Empty : string.Empty;
-	public static void PushContext(string key, object value) => VariableContext.PushContext(key, value);
-	public static void PopContext(string key) => VariableContext.PopContext(key);
 	public static Visibility[] Visibilities = new Visibility[0];
 	public static string LogFile = "log.txt";
 	public const char ColorSuffix = '\b';
@@ -80,18 +76,18 @@ public static class Log {
 	public static void e(object? text) => PrintWithVisibilityInternal(text, Code.Error, true, IdentifySourceCode);
 	public static void f(object? text) {
 		PrintWithVisibilityInternal(text, Code.Critical, true, IdentifySourceCode);
-		if (AssertThrowsException) {
-			StackTrace t = new StackTrace(2);
-			PrintWithVisibilityInternal(t.ToString(), Code.Verbose, true, IdentifySourceCode);
-			if (text == null) text = string.Empty;
-			throw new Exception(text.ToString());
-		}
 	}
-	public static void Assert(bool condition, string message) {
+	public static void Assert(bool condition, string? message) {
 		if (condition) {
 			PrintWithVisibilityInternal(message, Code.SuccessfulAsserts, true, IdentifySourceCode);
 		} else {
 			f(message);
+			if (AssertThrowsException) {
+				StackTrace t = new StackTrace(2);
+				PrintWithVisibilityInternal(t.ToString(), Code.Verbose, true, IdentifySourceCode);
+				if (message == null) message = string.Empty;
+				throw new Exception(message);
+			}
 		}
 	}
 	public static void PrintWithVisibility(object? msg, Code minimumVisibility, bool endline)
@@ -176,7 +172,6 @@ public static class Log {
 		return sb.ToString();
 	}
 	public static string Format(string text) {
-		text = VariableContext?.ProcessVariables(text) ?? text;
 		text = ProcessQuoteColors(text);
 		return text;
 	}
