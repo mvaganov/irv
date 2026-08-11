@@ -1,5 +1,6 @@
 ﻿using src;
 using src.Core;
+using System.Diagnostics.CodeAnalysis;
 namespace irv.src;
 
 using VotesPerCandidate = Dictionary<IRV.Candidate, List<IRV.Ballot>>;
@@ -41,19 +42,20 @@ public class IRV {
 		}
 	}
 
+	// TODO what is this data structure for? should it be renamed? refactored?
 	public class RunoffHistory {
 		public string title;
 		// TODO remove this variable?
 		public IList<Candidate>? winner;
 		/// how many votes total were recorded
-		public int numVotes;
+		public int numBallots;
 		/// <summary>who the candidates are.</summary>
 		public List<Candidate> candidates;
 		public string notes;
 		/// <summary>data to describe graphical representation [IRV rank][candidate]</summary>
 		public List<List<VoteBloc>> data;
-		public RunoffHistory(int numVotes, List<Candidate> candidates, string notes, List<List<VoteBloc>> data) {
-			this.numVotes = numVotes;
+		public RunoffHistory(int numBallots, List<Candidate> candidates, string notes, List<List<VoteBloc>> data) {
+			this.numBallots = numBallots;
 			this.candidates = candidates;
 			this.notes = notes;
 			this.data = data;
@@ -276,6 +278,7 @@ public class IRV {
 			}
 		}
 		order.Sort((a, b) => {
+			// TODO sort by vote total, not vote count. there is a distinction because some ballots have a non-1 vote weight.
 			int countA = tally.TryGetValue(a, out List<Ballot>? ballotsA) ? ballotsA.Count : 0;
 			int countB = tally.TryGetValue(b, out List<Ballot>? ballotsB) ? ballotsB.Count : 0;
 			float diff = countB - countA;
@@ -333,14 +336,14 @@ public class IRV {
 		Dictionary<Candidate, float> weightsForThisVisualization = new Dictionary<Candidate, float>();
 		for (int s = 0; s < voteStateHistory.Count; ++s) {
 			VotesPerCandidate state = voteStateHistory[s];
-			foreach (KeyValuePair<Candidate, List<Ballot>> c in state) {
-				float val;
-				if (weightsForThisVisualization.TryGetValue(c.Key, out val)) {
-					val += c.Value.Count;
+			foreach (KeyValuePair<Candidate, List<Ballot>> kvp in state) {
+				float voteCountOfCandidate = SumVoteValue(kvp.Value);
+				if (weightsForThisVisualization.TryGetValue(kvp.Key, out float val)) {
+					val += voteCountOfCandidate;
 				} else {
-					val = c.Value.Count;
+					val = voteCountOfCandidate;
 				}
-				weightsForThisVisualization[c.Key] = val;
+				weightsForThisVisualization[kvp.Key] = val;
 			}
 		}
 		return weightsForThisVisualization;
@@ -377,7 +380,7 @@ public class IRV {
 		List<List<VoteBloc>> visBlocs,
 		List<Candidate> candidatesListing,
 		//Dictionary<Candidate, Color> colorMap,
-		int voteCount,
+		int numBallotsTotal,
 		string title) {
 		// create a lookup table for unique IDs to reduce serialized data. only use IDs that are in this bloc visualization.
 		Dictionary<Candidate, int> actuallyNeeded = new Dictionary<Candidate, int>();
@@ -395,7 +398,7 @@ public class IRV {
 			}
 		}
 		IRV_convertVisualizationBlocIds(visBlocs, idToIndexInUse);
-		RunoffHistory sr = new RunoffHistory(voteCount, indexToIdToSend, title, visBlocs);
+		RunoffHistory sr = new RunoffHistory(numBallotsTotal, indexToIdToSend, title, visBlocs);
 		return sr;
 	}
 
@@ -442,7 +445,7 @@ public class IRV {
 					if (!totalVotes.TryGetValue(candidate, out float votes)) {
 						votes = 0;
 					}
-					totalVotes[candidate] = votes + ballot.weight;
+					totalVotes[candidate] = votes + (1 * ballot.weight);
 				}
 				completeSet.Add(candidate);
 				candidate.totalVotes++;
@@ -582,7 +585,7 @@ public class IRV {
 		public void DuplicateLatestState() {
 			out_voteState.Add(CloneVotesPerCandidate(LatestState));
 		}
-		public bool CalculateWinner(Candidate? candidateForExhausted, float pluralityPercentage, out int voteCount) {
+		public bool CalculateWinner(Candidate? candidateForExhausted, float pluralityPercentage, out float voteCount) {
 			winner = MajorityCandidates(LatestState, candidateForExhausted, out voteCount, pluralityPercentage);
 			bool hasWinner = winner?.Count > 0;
 			return hasWinner;
@@ -658,7 +661,7 @@ public class IRV {
 			if (++iterations > 10000) {
 				throw new Exception("too many iterations");
 			}
-			if (r.CalculateWinner(candidateForExhaustedBallots, pluralityPercentage, out int voteCount) || r.IsExhausted(candidateForExhaustedBallots)) {
+			if (r.CalculateWinner(candidateForExhaustedBallots, pluralityPercentage, out float voteCount) || r.IsExhausted(candidateForExhaustedBallots)) {
 				yield return Response.Processing(electionsToProcess);
 				if (++processedElection >= electionsToProcess.Count) {
 					break;
@@ -667,7 +670,7 @@ public class IRV {
 					r = electionsToProcess[processedElection];
 				}
 			}
-			CountVoteExtremes(r.LatestState, out int leastVotes, out int mostVotes, candidateForExhaustedBallots);
+			CountVoteExtremes(r.LatestState, out float leastVotes, out float mostVotes, candidateForExhaustedBallots);
 			float futureVoteCountEstimate = 0;
 			for (int i = 0; i < likelyOrder.Length; ++i) {
 				if (!exhastedCandidates.Contains(likelyOrder[i])) {
@@ -678,7 +681,7 @@ public class IRV {
 			futureVoteCountEstimate = Math.Min(futureVoteCountEstimate, voteCount);
 			// before doing the standard remove-the-current-loser logic, clear out the extremely weak candidates that could never win.
 			// eliminates the chance that statistical noise could remove an actual popular choice
-			if (!GetExtremelyWeakCandidates(r.LatestState, futureVoteCountEstimate, pluralityPercentage, likelyOrder, totalUnrankedVotes, out List<Candidate>? losers)) {
+			if (!TryGetExtremelyWeakCandidates(r.LatestState, futureVoteCountEstimate, pluralityPercentage, likelyOrder, totalUnrankedVotes, out List<Candidate>? losers)) {
 				losers = GetLosers(r.LatestState, leastVotes, candidateForExhaustedBallots);
 			}
 			losers.Sort((a, b) => { return a.totalVotes != b.totalVotes ? a.totalVotes.CompareTo(b.totalVotes) : a.tieWeight.CompareTo(b.tieWeight); });
@@ -701,8 +704,8 @@ public class IRV {
 		} while (processedElection < electionsToProcess.Count);
 		yield return Response.Success(electionsToProcess);
 	}
-	public static bool GetExtremelyWeakCandidates(VotesPerCandidate state, float voteCount, float pluralityPercentage, Candidate[] likelyOrder,
-		Dictionary<Candidate,float> totalUnrankedVotes, out List<Candidate>? losers) {
+	public static bool TryGetExtremelyWeakCandidates(VotesPerCandidate state, float voteCount, float pluralityPercentage, Candidate[] likelyOrder,
+		Dictionary<Candidate,float> totalUnrankedVotes, [NotNullWhen(true)] out List<Candidate>? losers) {
 		int minRequiredToWin = (int)(voteCount * pluralityPercentage);
 		HashSet<Candidate> extremelyWeakCandidates = new HashSet<Candidate>();
 		foreach (var kvp in state) {
@@ -727,47 +730,56 @@ public class IRV {
 		}
 		return false;
 	}
-	public static List<Candidate> GetLosers(VotesPerCandidate tally, int leastVotes, Candidate fullyExhausted) {
+	public static List<Candidate> GetLosers(VotesPerCandidate tally, float leastVotes, Candidate fullyExhausted) {
 		List<Candidate> losers = new List<Candidate>();
 		foreach (var k in tally) {
 			if (k.Key == fullyExhausted) continue;
-			if (k.Value.Count <= leastVotes) {
+			float voteCountOfCandidate = SumVoteValue(k.Value);
+			if (voteCountOfCandidate <= leastVotes) {
 				losers.Add(k.Key);
 				if (k.Key == null) { Log.e("why is null losing?... how is null a valid key?"); return null; }
 			}
 		}
 		return losers;
 	}
-	public static void CountVoteExtremes(VotesPerCandidate tally, out int leastVotes, out int mostVotes, Candidate candidateForExhaustedVotes) {
-		leastVotes = int.MaxValue;
-		mostVotes = 0;
+	public static void CountVoteExtremes(VotesPerCandidate tally, out float leastVotes, out float mostVotes, Candidate candidateForExhaustedVotes) {
+		leastVotes = float.PositiveInfinity;
+		mostVotes = float.NegativeInfinity;
 		foreach (var k in tally) {
 			if (k.Key == candidateForExhaustedVotes) continue;
-			int len = k.Value.Count;
-			if (len > 0) {
-				if (len < leastVotes) { leastVotes = len; }
-				if (len > mostVotes) { mostVotes = len; }
-			}
+			float voteCount = SumVoteValue(k.Value);
+			if (voteCount < leastVotes) { leastVotes = voteCount; }
+			if (voteCount > mostVotes) { mostVotes = voteCount; }
 		}
 	}
 
-	public static int SumUnexhaustedVotes(VotesPerCandidate tally, Candidate? candidateForExhaustedVotes) {
-		int sumVotes = 0;
-		foreach (var k in tally) {
-			if (k.Key == candidateForExhaustedVotes) continue;
-			sumVotes += k.Value.Count;
+	public static float SumVoteValue(List<Ballot> votes) {
+		float sumVotes = 0;
+		for (int i = 0; i < votes.Count; i++) {
+			sumVotes += votes[i].weight;
 		}
 		return sumVotes;
 	}
 
-	public static IList<Candidate>? MajorityCandidates(VotesPerCandidate tally, Candidate? fullyExhausted, out int voteCount, float pluralityPercentage = 0.5f) {
-		voteCount = SumUnexhaustedVotes(tally, fullyExhausted);
-		if (voteCount == 0) { return null; }
+	public static float SumUnexhaustedVotes(VotesPerCandidate tally, Candidate? candidateForExhaustedVotes) {
+		float sumVotes = 0;
+		foreach (var k in tally) {
+			if (k.Key == candidateForExhaustedVotes) continue;
+			float voteCount = SumVoteValue(k.Value);
+			sumVotes += voteCount;
+		}
+		return sumVotes;
+	}
+
+	public static IList<Candidate>? MajorityCandidates(VotesPerCandidate tally, Candidate? fullyExhausted, out float voteCountTotal, float pluralityPercentage = 0.5f) {
+		voteCountTotal = SumUnexhaustedVotes(tally, fullyExhausted);
+		if (voteCountTotal == 0) { return null; }
 		List<Candidate>? winners = null;
-		int majority = (int)(voteCount * pluralityPercentage);
+		float majority = voteCountTotal * pluralityPercentage;
 		foreach (var k in tally) {
 			if (k.Key == fullyExhausted) continue;
-			if (k.Value.Count >= majority) {
+			float voteCountOfCandidate = SumVoteValue(k.Value);
+			if (voteCountOfCandidate >= majority) {
 				if (winners == null) winners = new List<Candidate>();
 				winners.Add(k.Key);
 			}
