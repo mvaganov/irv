@@ -56,7 +56,7 @@ public class Program {
 				for (int e = 0; e < allData.Count; ++e) {
 					RankedChoiceElectionResultsStepByStep election = allData[e];
 					if (election.serialized == null) continue;
-					Log.WriteLine(election.serialized.notes);
+					Log.WriteLine(election.serialized.title);
 					List<List<VoteBloc>> allStates = election.serialized.data;
 					for (int i = 0; i < allStates.Count; ++i) {
 						List<VoteBloc> state = allStates[i];

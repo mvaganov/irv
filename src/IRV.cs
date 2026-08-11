@@ -45,30 +45,24 @@ public class IRV {
 	// TODO what is this data structure for? should it be renamed? refactored?
 	public class RunoffHistory {
 		public string title;
-		// TODO remove this variable?
 		public IList<Candidate>? winner;
-		/// how many votes total were recorded
 		public int numBallots;
-		/// <summary>who the candidates are.</summary>
 		public List<Candidate> candidates;
-		public string notes;
 		/// <summary>data to describe graphical representation [IRV rank][candidate]</summary>
 		public List<List<VoteBloc>> data;
-		public RunoffHistory(int numBallots, List<Candidate> candidates, string notes, List<List<VoteBloc>> data) {
+		public RunoffHistory(int numBallots, List<Candidate> candidates, string title, List<List<VoteBloc>> data) {
 			this.numBallots = numBallots;
 			this.candidates = candidates;
-			this.notes = notes;
+			this.title = title;
 			this.data = data;
 		}
 	}
 
 	public class RunoffResult {
-		public int rank; // TODO remove?
 		public IList<Candidate> winner;
-		public int voteCount; // TODO remove?
 		public RunoffHistory showme;
-		public RunoffResult(int r, List<Candidate> C, int v, RunoffHistory showme) {
-			this.rank = r; this.winner = C; this.voteCount = v; this.showme = showme;
+		public RunoffResult(List<Candidate> C, RunoffHistory showme) {
+			this.winner = C; this.showme = showme;
 		}
 	}
 
@@ -376,7 +370,7 @@ public class IRV {
 		}
 	}
 
-	static RunoffHistory IRV_serializeVisualizationBlocData(
+	static RunoffHistory CalculateSerializedVisualization(
 		List<List<VoteBloc>> visBlocs,
 		List<Candidate> candidatesListing,
 		//Dictionary<Candidate, Color> colorMap,
@@ -460,9 +454,6 @@ public class IRV {
 		return candidateList;
 	}
 
-	private delegate void WhatToDoWithResults(List<RunoffResult> results);
-	private delegate void InstantRunoff(WhatToDoWithResults cb);
-
 	public static IEnumerator<Response> Calc(List<Ballot> originalBallots, int maxWinnersCalculated = -1, float pluralityPercentage = 0.5f) {
 		List<Ballot> ballots = new List<Ballot>(originalBallots);
 		// purge duplicate ballots
@@ -508,7 +499,7 @@ public class IRV {
 					IRV_calculateVisualizationModel(visBlocs, voteStateHistory, voteMigrationHistory, candidateForExhaustedBallots);
 
 					RunoffHistory serialized =
-						IRV_serializeVisualizationBlocData(visBlocs, candidates, ballots.Count, "rank" + place);
+						CalculateSerializedVisualization(visBlocs, candidates, ballots.Count, $"rank {place}");
 
 					// IRV_out(place+ "> "+best.winner);
 					serialized.title = $"rank {place}";
