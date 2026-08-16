@@ -1,13 +1,5 @@
-﻿
-namespace src.Core;
-
-public enum CommandState {
-	None = -1,
-	Success = 0,
-	Fail = 1,
-	Processing = 2,
-	Error = 3,
-}
+﻿namespace src.Core;
+public enum CommandState { None = -1, Success = 0, Fail = 1, Processing = 2, Error = 3 }
 public struct Response {
 	public CommandState CommandState;
 	public object? Message;
@@ -32,27 +24,4 @@ public struct Response {
 	public bool Equals(Response other) => CommandState == other.CommandState && Message == other.Message;
 	public static bool operator ==(Response a, Response b) => a.Equals(b);
 	public static bool operator !=(Response a, Response b) => !a.Equals(b);
-	public static Response Consolidate(IEnumerable<Response>? responses) {
-		if (responses == null) { return SUCCESS; }
-		List<Response>? list = null;
-		bool hasNonSuccess = false;
-		foreach (var r in responses) {
-			if (r == SUCCESS) { continue; }
-			if (r.CommandState != CommandState.Success) { hasNonSuccess = true; }
-			if (r == FAIL) { continue; }
-			if (list == null) { list = new List<Response>(); }
-			list.Add(r);
-		}
-		if (list == null || list.Count == 0) { return hasNonSuccess ? FAIL : SUCCESS; }
-		return hasNonSuccess ? Error(list) : Success(list);
-	}
-	public static Response TryCast<T>(object? obj, out T? result) where T : class {
-		result = obj as T;
-		if (result == null) {
-			string typeName = obj != null ? obj.GetType().Name : "null";
-			string message = $"Expected `{typeof(T).Name}`, not `{typeName}`";
-			return Error(message);
-		}
-		return SUCCESS;
-	}
 }

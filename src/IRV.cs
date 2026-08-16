@@ -2,30 +2,26 @@
 using src.Core;
 using System.Diagnostics.CodeAnalysis;
 namespace irv.src;
-
 using VotesPerCandidate = Dictionary<IRV.Candidate, List<IRV.Ballot>>;
-
 public class IRV {
-
 	[System.Serializable]
 	public class Candidate {
 		public string name;
 		public Color color = Color.clear;
-		public float tieWeight = 0;
-		public int totalVotes = 0;
+		public float harmonicBordaCount = 0;
+		public float totalVotesWeighted = 0;
 		override public string ToString() { return name; }
 		public Candidate(string name) { this.name = name; }
 		public Candidate(string name, Color color) { this.name = name; this.color = color; }
-		public Candidate(Candidate copy) { name = copy.name; color = copy.color; tieWeight = copy.tieWeight; totalVotes = copy.totalVotes; }
+		public Candidate(Candidate copy) { name = copy.name; color = copy.color; harmonicBordaCount = copy.harmonicBordaCount; totalVotesWeighted = copy.totalVotesWeighted; }
 	}
-
 	[System.Serializable]
 	public class Ballot {
 		public string? id;
 		public Candidate[]? vote;
-		// TODO implement weight.
-		public float weight = 1;
-		public override string? ToString() => vote != null ? string.Join(", ", Array.ConvertAll(vote, v => v.name)) : null;
+		public float voteWeight = 1;
+		public override string? ToString() => (vote != null ? "[" + string.Join(", ", Array.ConvertAll(vote, v => v.name)) + "]" : "")
+			+ (voteWeight != 1 ? $"({voteWeight})" : "");
 		public int GetBestChoiceIndex(HashSet<Candidate> exhastedCandidates) {
 			if (vote == null) { return -1; }
 			for (int i = 0; i < vote.Length; ++i) {
@@ -41,31 +37,20 @@ public class IRV {
 			return index >= 0 ? vote[index] : null;
 		}
 	}
-
-	// TODO what is this data structure for? should it be renamed? refactored?
-	public class RunoffHistory {
+	public class VoteCampaign {
 		public string title;
 		public IList<Candidate>? winner;
 		public int numBallots;
 		public List<Candidate> candidates;
 		/// <summary>data to describe graphical representation [IRV rank][candidate]</summary>
 		public List<List<VoteBloc>> data;
-		public RunoffHistory(int numBallots, List<Candidate> candidates, string title, List<List<VoteBloc>> data) {
+		public VoteCampaign(string title, int numBallots, List<Candidate> candidates, List<List<VoteBloc>> data) {
 			this.numBallots = numBallots;
 			this.candidates = candidates;
 			this.title = title;
 			this.data = data;
 		}
 	}
-
-	public class RunoffResult {
-		public IList<Candidate> winner;
-		public RunoffHistory showme;
-		public RunoffResult(List<Candidate> C, RunoffHistory showme) {
-			this.winner = C; this.showme = showme;
-		}
-	}
-
 	public class VoteBloc {
 		public Candidate candidate;
 		public int position;
@@ -370,7 +355,7 @@ public class IRV {
 		}
 	}
 
-	static RunoffHistory CalculateSerializedVisualization(
+	static VoteCampaign CalculateSerializedVisualization(
 		List<List<VoteBloc>> visBlocs,
 		List<Candidate> candidatesListing,
 		//Dictionary<Candidate, Color> colorMap,
@@ -379,20 +364,19 @@ public class IRV {
 		// create a lookup table for unique IDs to reduce serialized data. only use IDs that are in this bloc visualization.
 		Dictionary<Candidate, int> actuallyNeeded = new Dictionary<Candidate, int>();
 		Dictionary<Candidate, int> idToIndexInUse = new Dictionary<Candidate, int>();
-		List<Color> colorListToSend = new List<Color>();
-		List<Candidate> indexToIdToSend = new List<Candidate>();
+		//List<Color> colorListToSend = new List<Color>();
+		//List<Candidate> candidatesInOrder = new List<Candidate>();
 		actuallyNeeded[BasicExhaustedCandidate] = 1; // make sure IRV_EX is in the list (will be first if it is).
 		IRV_convertVisualizationBlocIds(visBlocs, null, actuallyNeeded);
 		for (int i = 0; i < candidatesListing.Count; ++i) {
 			if (actuallyNeeded.ContainsKey(candidatesListing[i])) {
-				idToIndexInUse[candidatesListing[i]] = indexToIdToSend.Count;
-				indexToIdToSend.Add(candidatesListing[i]);
-				// FIXME make sure that hex codes are printed here...
-				colorListToSend.Add(candidatesListing[i].color);
+				idToIndexInUse[candidatesListing[i]] = i;
+				//candidatesInOrder.Add(candidatesListing[i]);
+				//colorListToSend.Add(candidatesListing[i].color);
 			}
 		}
 		IRV_convertVisualizationBlocIds(visBlocs, idToIndexInUse);
-		RunoffHistory sr = new RunoffHistory(numBallotsTotal, indexToIdToSend, title, visBlocs);
+		VoteCampaign sr = new VoteCampaign(title, numBallotsTotal, candidatesListing, visBlocs);
 		return sr;
 	}
 
@@ -439,17 +423,16 @@ public class IRV {
 					if (!totalVotes.TryGetValue(candidate, out float votes)) {
 						votes = 0;
 					}
-					totalVotes[candidate] = votes + (1 * ballot.weight);
+					totalVotes[candidate] = votes + (1 * ballot.voteWeight);
 				}
 				completeSet.Add(candidate);
-				candidate.totalVotes++;
-				// first-pick adds 1 point. 2nd pick adds 1/2 a point. 3rd pick 1/3, 4th pick 1/4, 5 pick 1/5, ...
-				candidate.tieWeight += (1 / (i + 1.0f)) * ballot.weight;
+				candidate.totalVotesWeighted += ballot.voteWeight;
+				candidate.harmonicBordaCount += (1 / (i + 1.0f)) * ballot.voteWeight;
 			}
 		}
 		List<Candidate> candidateList = completeSet.ToList();
 		candidateList.Sort((a, b) => {
-			return (int)((b.tieWeight - a.tieWeight) * 1024);
+			return (int)((b.harmonicBordaCount - a.harmonicBordaCount) * 1024);
 		});
 		return candidateList;
 	}
@@ -498,7 +481,7 @@ public class IRV {
 					List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory = elections[i].out_voteMigrationHistory;
 					IRV_calculateVisualizationModel(visBlocs, voteStateHistory, voteMigrationHistory, candidateForExhaustedBallots);
 
-					RunoffHistory serialized =
+					VoteCampaign serialized =
 						CalculateSerializedVisualization(visBlocs, candidates, ballots.Count, $"rank {place}");
 
 					// IRV_out(place+ "> "+best.winner);
@@ -551,7 +534,7 @@ public class IRV {
 		public List<Dictionary<Candidate, VotesPerCandidate>> out_voteMigrationHistory;
 		public List<Ballot> exhaustedBallots = new List<Ballot>();
 		public IList<Candidate>? winner;
-		public RunoffHistory? serialized;
+		public VoteCampaign? serialized;
 		public string? note;
 		public VotesPerCandidate LatestState => out_voteState[out_voteState.Count - 1];
 		public RankedChoiceElectionResultsStepByStep() {
@@ -675,7 +658,7 @@ public class IRV {
 			if (!TryGetExtremelyWeakCandidates(r.LatestState, futureVoteCountEstimate, pluralityPercentage, likelyOrder, totalUnrankedVotes, out List<Candidate>? losers)) {
 				losers = GetLosers(r.LatestState, leastVotes, candidateForExhaustedBallots);
 			}
-			losers.Sort((a, b) => { return a.totalVotes != b.totalVotes ? a.totalVotes.CompareTo(b.totalVotes) : a.tieWeight.CompareTo(b.tieWeight); });
+			losers.Sort((a, b) => { return a.totalVotesWeighted != b.totalVotesWeighted ? a.totalVotesWeighted.CompareTo(b.totalVotesWeighted) : a.harmonicBordaCount.CompareTo(b.harmonicBordaCount); });
 			if (losers.Count > 1) {
 				Log.WriteLine($"tie for worst: {string.Join(", ", losers)}\n");
 			}
@@ -747,7 +730,7 @@ public class IRV {
 	public static float SumVoteValue(List<Ballot> votes) {
 		float sumVotes = 0;
 		for (int i = 0; i < votes.Count; i++) {
-			sumVotes += votes[i].weight;
+			sumVotes += votes[i].voteWeight;
 		}
 		return sumVotes;
 	}
