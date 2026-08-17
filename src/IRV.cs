@@ -430,7 +430,7 @@ public class IRV {
 		//List<Color> colorListToSend = new List<Color>();
 		//List<Candidate> candidatesInOrder = new List<Candidate>();
 		actuallyNeeded[BasicExhaustedCandidate] = 1; // make sure IRV_EX is in the list (will be first if it is).
-		IRV_convertVisualizationBlocIds(visBlocs, null, actuallyNeeded);
+		IRV_convertVisualizationBlocIds(visBlocs, actuallyNeeded);
 		for (int i = 0; i < candidatesListing.Count; ++i) {
 			if (actuallyNeeded.ContainsKey(candidatesListing[i])) {
 				idToIndexInUse[candidatesListing[i]] = i;
@@ -447,10 +447,9 @@ public class IRV {
 	/// <summary>client-side visualization
 	/// filter the visualization bloc object data. allows size reduction</summary>
 	/// <param name="allVisBlocsStates">All vis blocs states.</param>
-	/// <param name="conversionTable">if not null, used to replace ids with an alternate value</param>
 	/// <param name="out_conversionsMade">if not null, counts how many times any id was replaced</param>
 	public static void IRV_convertVisualizationBlocIds(List<List<VoteBloc>> allVisBlocsStates,
-		Dictionary<Candidate, int> conversionTable, Dictionary<Candidate, int> out_conversionsMade = null) {
+		Dictionary<Candidate, int> out_conversionsMade) {
 		for (int s = 0; s < allVisBlocsStates.Count; ++s) {
 			List<VoteBloc> state = allVisBlocsStates[s];
 			for (int b = 0; b < state.Count; ++b) {
@@ -459,7 +458,7 @@ public class IRV {
 					out_conversionsMade[bloc.candidate] = (out_conversionsMade.ContainsKey(bloc.candidate))
 						? (out_conversionsMade[bloc.candidate] + 1) : 1;
 				}
-				List<VoteBloc.Migration> nextList = bloc.migrations;
+				List<VoteBloc.Migration>? nextList = bloc.migrations;
 				if (nextList != null) {
 					for (int n = 0; n < nextList.Count; ++n) {
 						VoteBloc.Migration nextEntry = nextList[n];
@@ -616,7 +615,7 @@ public class IRV {
 			futureVoteCountEstimate = Math.Min(futureVoteCountEstimate, voteCount);
 			// before doing the standard remove-the-current-loser logic, clear out the extremely weak candidates that could never win.
 			// eliminates the chance that statistical noise could remove an actual popular choice
-			if (!TryGetExtremelyWeakCandidates(r.LatestState, futureVoteCountEstimate, pluralityPercentage, likelyOrder, out List<Candidate>? losers)) {
+			if (!TryGetExtremelyWeakCandidates(r.LatestState, futureVoteCountEstimate, pluralityPercentage, likelyOrder, out List<Candidate> losers)) {
 				losers = GetLosers(r.LatestState, leastVotes, candidateForExhaustedBallots);
 			}
 			losers.Sort((a, b) => { return a.totalVotesWeighted != b.totalVotesWeighted ? a.totalVotesWeighted.CompareTo(b.totalVotesWeighted) : a.harmonicBordaCount.CompareTo(b.harmonicBordaCount); });
@@ -640,7 +639,7 @@ public class IRV {
 		yield return Response.Success(electionsToProcess);
 	}
 	public static bool TryGetExtremelyWeakCandidates(VotesPerCandidate state, float voteCount, float pluralityPercentage, Candidate[] likelyOrder,
-		[NotNullWhen(true)] out List<Candidate>? losers) {
+		[NotNullWhen(true)] out List<Candidate> losers) {
 		int minRequiredToWin = (int)(voteCount * pluralityPercentage);
 		HashSet<Candidate> extremelyWeakCandidates = new HashSet<Candidate>();
 		foreach (var kvp in state) {
@@ -649,11 +648,10 @@ public class IRV {
 				extremelyWeakCandidates.Add(canditate);
 			}
 		}
+		losers = new List<Candidate>();
 		if (extremelyWeakCandidates.Count == 0) {
-			losers = null;
 			return false;
 		}
-		losers = new List<Candidate>();
 		for (int i = likelyOrder.Length - 1; i >= 0; --i) {
 			if (extremelyWeakCandidates.Contains(likelyOrder[i])) {
 				float cursedVoteCount = likelyOrder[i].totalVotesWeighted;
@@ -672,8 +670,8 @@ public class IRV {
 			if (k.Key == fullyExhausted) continue;
 			float voteCountOfCandidate = SumVoteValue(k.Value);
 			if (voteCountOfCandidate <= leastVotes) {
+				if (k.Key == null) { Log.e("why is null losing?... how is null a valid key?"); continue; }
 				losers.Add(k.Key);
-				if (k.Key == null) { Log.e("why is null losing?... how is null a valid key?"); return null; }
 			}
 		}
 		return losers;
