@@ -71,7 +71,7 @@ public class Program {
 							for (int m = 0; m < bloc.migrations.Count; ++m) {
 								VoteBloc.Migration migration = bloc.migrations[m];
 								if (migration.newBoss == bloc.candidate) continue; // hide uninteresting direct migrations
-								for (int j = 0; j < migration.voteCount; ++j) {
+								for (int j = 0; j < migration.count; ++j) {
 									bufferFrom[migration.fromPosition + j] = migration.newBoss.name[0];
 									bufferTo[migration.toPosition + j] = migration.newBoss.name[0];
 								}
@@ -100,7 +100,7 @@ public class Program {
 		StringBuilder sb = new StringBuilder();
 		for (int b = 0; b < state.Count; ++b) {
 			sb.Append(Log.ColorCode(colors[b % colors.Length]));
-			for (int w = 0; w < state[b].voteCount; ++w) {
+			for (int w = 0; w < state[b].ballotCount; ++w) {
 				if (w < state[b].candidate.name.Length) {
 					sb.Append(state[b].candidate.name[w]);
 				} else {
