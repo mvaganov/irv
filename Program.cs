@@ -16,10 +16,10 @@ public class Program {
 		candidates.Add(new Candidate("Sensei"));
 		candidates.Add(new Candidate("Cheif"));
 		candidates.Add(new Candidate("Chort"));
-		candidates.Add(new Candidate("Nunov"));
-		candidates.Add(new Candidate("Glokglok"));
-		candidates.Add(new Candidate("Naltron"));
-		candidates.Add(new Candidate("Dunhab"));
+		candidates.Add(new Candidate("Nunov", Color.darkYellow));
+		candidates.Add(new Candidate("Glokglok", Color.darkYellow));
+		candidates.Add(new Candidate("Naltron", Color.blue));
+		candidates.Add(new Candidate("Dunhab", Color.darkGreen));
 		for (int i = 0; i < randomlyGenerateTest; ++i) {
 			int picks = (int)(Rand.Number * Rand.Number * (candidates.Count - 1) + 2);
 			picks = (int)Math.Min(picks, candidates.Count);
@@ -43,24 +43,23 @@ public class Program {
 		//for(int i = 0; i < votes.Count; ++i) { Log.WriteLine(votes[i]); }
 		IEnumerator<Response> iter = IRV.Calc(votes);
 		uint last = Rand.Timestamp;
-		ConsoleColor[] colors = new ConsoleColor[] { ConsoleColor.Red, ConsoleColor.Green, ConsoleColor.Blue, ConsoleColor.Yellow, ConsoleColor.Magenta, ConsoleColor.Cyan };
 		while (iter.MoveNext()) {
 			uint now = Rand.Timestamp;
 			int passed = (int)(now - last);
 			Response response = iter.Current;
 			object? messsge = response.Message;
 			string typeLabel = messsge?.GetType().Name ?? "null";
-			List<RankedChoiceElectionResultsStepByStep>? allData = messsge as List<RankedChoiceElectionResultsStepByStep>;
+			List<ElectionResultsStepByStep>? allData = messsge as List<ElectionResultsStepByStep>;
 			if (allData != null) {
 				typeLabel += $"[{allData.Count}]";
 				for (int e = 0; e < allData.Count; ++e) {
-					RankedChoiceElectionResultsStepByStep election = allData[e];
+					ElectionResultsStepByStep election = allData[e];
 					if (election.serialized == null) continue;
 					Log.WriteLine(election.serialized.title);
 					List<List<VoteBloc>> allStates = election.serialized.data;
 					for (int i = 0; i < allStates.Count; ++i) {
 						List<VoteBloc> state = allStates[i];
-						Log.WriteLine(StateToString(state, colors, out int index));
+						Log.WriteLine(StateToString(state, out int index));
 						// draw moves
 						char[] bufferFrom = new char[index];
 						char[] bufferTo = new char[index];
@@ -95,14 +94,16 @@ public class Program {
 		}
 	}
 
-	public static string StateToString(List<VoteBloc> state, ConsoleColor[] colors, out int index) {
+	public static string StateToString(List<VoteBloc> state, out int index) {
 		index = 0;
 		StringBuilder sb = new StringBuilder();
 		for (int b = 0; b < state.Count; ++b) {
-			sb.Append(Log.ColorCode(colors[b % colors.Length]));
-			for (int w = 0; w < state[b].ballotCount; ++w) {
-				if (w < state[b].candidate.name.Length) {
-					sb.Append(state[b].candidate.name[w]);
+			VoteBloc bloc = state[b];
+			Candidate candidate = bloc.candidate;
+			sb.Append(Log.ColorCode(candidate.color));
+			for (int w = 0; w < bloc.ballotCount; ++w) {
+				if (w < candidate.name.Length) {
+					sb.Append(candidate.name[w]);
 				} else {
 					sb.Append('.');
 				}
