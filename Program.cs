@@ -41,7 +41,8 @@ public class Program {
 			votes.Add(v);
 		}
 		//for(int i = 0; i < votes.Count; ++i) { Log.WriteLine(votes[i]); }
-		IEnumerator<Response> iter = IRV.Calc(votes);
+		IRV irv = new IRV();
+		IEnumerator<Response> iter = irv.Calc(votes);
 		uint last = Rand.Timestamp;
 		while (iter.MoveNext()) {
 			uint now = Rand.Timestamp;
@@ -49,14 +50,14 @@ public class Program {
 			Response response = iter.Current;
 			object? messsge = response.Message;
 			string typeLabel = messsge?.GetType().Name ?? "null";
-			List<ElectionResultsStepByStep>? allData = messsge as List<ElectionResultsStepByStep>;
+			List<CompleteElectionResults>? allData = messsge as List<CompleteElectionResults>;
 			if (allData != null) {
 				typeLabel += $"[{allData.Count}]";
 				for (int e = 0; e < allData.Count; ++e) {
-					ElectionResultsStepByStep election = allData[e];
-					if (election.serialized == null) continue;
-					Log.WriteLine(election.serialized.title);
-					List<List<VoteBloc>> allStates = election.serialized.data;
+					CompleteElectionResults election = allData[e];
+					if (election.visualization == null) continue;
+					Log.WriteLine(election.label);
+					List<List<VoteBloc>> allStates = election.visualization.data;
 					for (int i = 0; i < allStates.Count; ++i) {
 						List<VoteBloc> state = allStates[i];
 						Log.WriteLine(StateToString(state, out int index));
@@ -79,14 +80,18 @@ public class Program {
 						Console.WriteLine(new string(bufferFrom));
 						Console.WriteLine(new string(bufferTo));
 					}
-					Console.WriteLine("------------------ winner: " + string.Join(", ", election.winner));
+					//Log.d("------------------ winner: " + string.Join(", ", election.winner));
 				}
 			}
 			switch (response.CommandState) {
 				case CommandState.Error:      Log.e(response.MessageString); break;
-				case CommandState.Processing: Log.d(response.MessageString); break;
+				case CommandState.Processing:
+					//Log.d(response.MessageString);
+					break;
 				case CommandState.Fail:       Log.f(response.MessageString); break;
-				case CommandState.Success:    Log.i(response.MessageString); break;
+				case CommandState.Success:
+					//Log.i(response.MessageString);
+					break;
 				default:
 					Log.WriteLine($"{passed} {iter.Current.CommandState} {typeLabel}");
 					break;

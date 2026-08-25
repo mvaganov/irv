@@ -141,8 +141,8 @@ public static class Log {
 			Write("\n");
 		}
 	}
-	public static void WriteLine(object text) => WriteLine(text?.ToString() ?? "");
-	public static void WriteLine(string text) => Write(text + "\n");
+	public static void WriteLine(object? text = null) => WriteLine(text?.ToString() ?? "");
+	public static void WriteLine(string? text) => Write(text + "\n");
 	public static string ProcessQuoteColors(string text) {
 		StringBuilder sb = new StringBuilder();
 		bool inDoubleQuotes = false;
