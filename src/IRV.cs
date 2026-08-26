@@ -1,7 +1,6 @@
 ﻿using src;
 using src.Core;
 using System.Diagnostics.CodeAnalysis;
-using System.Numerics;
 namespace irv.src;
 using VotesPerCandidate = Dictionary<Candidate, List<Ballot>>;
 
@@ -70,7 +69,7 @@ public class VoteVisualization {
 		List<VoteBloc>? blocsLastState = null;
 		Dictionary<Candidate, float> weightsForThisVisualization = IRV.CalculateWeightByStateImportance(voteStateHistory);
 		for (int stateIndex = 0; stateIndex < voteStateHistory.Count; ++stateIndex) {
-			List<Candidate> sorted = IRV_OrderCandidatesForBlocs(voteStateHistory[stateIndex], weightsForThisVisualization, candidateForExhausted, true);
+			List<Candidate> sorted = OrderCandidatesForBlocs(voteStateHistory[stateIndex], weightsForThisVisualization, candidateForExhausted, true);
 			blocsThisState = CalculateBlocs(sorted, voteStateHistory[stateIndex], weightsForThisVisualization);
 			out_visBlocs.Add(blocsThisState);
 			bool migrationsFromLastStateIsAvailable = blocsLastState != null;
@@ -82,7 +81,7 @@ public class VoteVisualization {
 	}
 
 	/// <returns>order of choices based on the tally, using tieBreakerData weighting to separate ties.</returns>
-	static List<Candidate> IRV_OrderCandidatesForBlocs(VotesPerCandidate tally, Dictionary<Candidate, float> tieBreakerData,
+	private static List<Candidate> OrderCandidatesForBlocs(VotesPerCandidate tally, Dictionary<Candidate, float> tieBreakerData,
 		Candidate? candidateForExhausted, bool forceTieBreakerDataAsOrder = false) {
 		List<Candidate> order = new List<Candidate>(tally.Keys);
 		HashSet<Candidate> candidatesInTheVisualization = new HashSet<Candidate>(order);
@@ -142,11 +141,11 @@ public class VoteBloc {
 		this.candidate = candidate; position = start; ballotCount = ballots;
 	}
 
+	/// <summary>voters are in a line, clumping with their top candidate</summary>
 	public static void CalculateMigrations(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted,
 		Dictionary<Candidate, VotesPerCandidate> voteMigration) {
 		List<Candidate> properOrderOfCandidatesInState = CalculateProperOrderOfAllCandidatesBetweenTwoStates(
 			blocsThisState, blocsLastState, candidateForExhausted);
-		// voters are in a line, where in the line are the votes coming and going? calculate for each candidate.
 		Dictionary<Candidate, int> whereVotesComeFrom = new Dictionary<Candidate, int>();
 		Dictionary<Candidate, int> whereVotesGoingTo = new Dictionary<Candidate, int>();
 		for (int i = 0; i < properOrderOfCandidatesInState.Count; ++i) {
@@ -369,24 +368,9 @@ public class CompleteElectionResults {
 	public bool IsExhausted() => CountValidCanidates() == 0;
 }
 
-// TODO check some of the static methods and make them non-static if it could reduce argument count
 public class IRV {
-	/// <summary>where votes go when none of their candidates survived the runoff.
-	/// regenerated each vote to ensure no collision with candidate names</summary>
+	/// <summary>where votes go when none of their candidates survived the runoff</summary>
 	public static readonly Candidate BasicExhaustedCandidate = new Candidate(".", Color.darkGray);
-	// TODO move to Color?
-	private static Color[] UnambiguousColorSequence = new Color[]{
-		Color.red, Color.green, Color.blue, //"888",
-		Color.yellow, Color.cyan, Color.magenta, //"222",
-		Color.darkRed, new Color(.75f,1,.75f), Color.darkBlue, //"666", 
-		new Color(1,1,.75f),Color.darkCyan,new Color(1,.75f,1),
-		Color.darkYellow,new Color(.75f,1,1),Color.darkMagenta,
-		new Color(1,.75f,.75f),Color.darkGreen,new Color(.75f,.75f,1),
-		new Color(1,.5f,0),new Color(0,1,.5f),new Color(.5f,0,1),
-		new Color(1,0,.5f),new Color(.5f,1,0),new Color(0,.5f,1),
-		new Color(.25f,.5f,0),new Color(0,.25f,.5f),new Color(.5f,0,.25f)
-	};
-
 	public List<Ballot>? ballots;
 	public Candidate? candidateForExhaustedBallots;
 	public Candidate[][]? orderHarmonicBorda;
@@ -404,7 +388,7 @@ public class IRV {
 			yield return Response.Error("Ballot ingestion failure");
 			yield break;
 		}
-		List<Candidate> candidates = SimpleVoteCalc(ballots, out orderHarmonicBorda, out orderPopularity);
+		List<Candidate> candidates = SimpleVoteCalc(out orderHarmonicBorda, out orderPopularity);
 		FillInUnassignedColors(candidates);
 		candidateForExhaustedBallots = GenerateExhaustedCandidatePlaceholder(candidates);
 		instantRunoffElectionsByRank = new List<List<CompleteElectionResults>>();
@@ -414,7 +398,7 @@ public class IRV {
 		IEnumerator<Response> CalculateVote() {
 			for (int place = 0; maxWinnersCalculated < 0 || place < maxWinnersCalculated; ++place) {
 				HashSet<Candidate> exhastedCandidates = new HashSet<Candidate>(winningCandidates);
-				IEnumerator<Response> electionCalculationProcess = ElectionCalculation(exhastedCandidates, ballots, candidateForExhaustedBallots, orderPopularity, pluralityPercentage);
+				IEnumerator<Response> electionCalculationProcess = ElectionCalculation(exhastedCandidates, orderPopularity, pluralityPercentage);
 				List<CompleteElectionResults>? electionVariations = null;
 				while (electionCalculationProcess.MoveNext()) {
 					electionVariations = electionCalculationProcess.Current.Message as List<CompleteElectionResults>;
@@ -459,31 +443,11 @@ public class IRV {
 			++duplicateVotes;
 		}
 	}
+
 	private static void FillInUnassignedColors(IList<Candidate> candidates) {
-		List<Color> colorList = new List<Color>(UnambiguousColorSequence);
-		AssignColorsToCandidates(candidates, colorList);
+		Color.AssignUniqueColors(candidates, c => c.color, (candidate, color) => candidate.color = color);
 	}
-	// TODO move to Color somehow? Func args for getting and setting colors?
-	/// <summary>Generates a default color for each candidate, if needed.</summary>
-	/// <param name="listing">out_Listing. the list of Candidates. If the Candidate has no coloration, it will have one after this method</param>
-	private static void AssignColorsToCandidates(IList<Candidate> candidates, List<Color> colorList) {
-		// remove auto-colors that are too close to the existing candidates
-		for (int i = 0; i < candidates.Count; ++i) {
-			if (candidates[i].color == Color.clear) continue;
-			var mostSimilarColors = colorList.OrderBy(c => Color.Distance(c, candidates[i].color));
-			foreach (Color similarColor in mostSimilarColors) {
-				float dist = Color.Distance(similarColor, candidates[i].color);
-				if (dist > 32) break;
-				colorList.Remove(similarColor);
-			}
-		}
-		// assign colors to candidates without coloration
-		int colorindex = 0;
-		foreach (Candidate k in candidates) {
-			if (k.color != Color.clear) continue;
-			k.color = colorList[(colorindex++) % colorList.Count];
-		}
-	}
+
 	private static bool AmbiguityInElectionsCollapsesToSingleOutcome(List<CompleteElectionResults> elections) {
 		bool electionResultsAreUnambiguous = true;
 		for (int i = 0; i < elections.Count; ++i) {
@@ -501,6 +465,7 @@ public class IRV {
 		}
 		return electionResultsAreUnambiguous;
 	}
+
 	private static void GenerateVisualsForEachElection(List<CompleteElectionResults> elections, IList<Candidate> candidatesInOrder, Candidate? candidateForExhaustedBallots) {
 		for (int i = 0; elections != null && i < elections.Count; ++i) {
 			CompleteElectionResults election = elections[i];
@@ -509,12 +474,14 @@ public class IRV {
 			election.visualization = visualization;
 		}
 	}
+
 	private static void LabelEachElection(List<CompleteElectionResults> elections, int whichRank) {
 		elections.ForEach(e => {
 			string winnerString = e.winner != null ? string.Join(", ", e.winner) : "<TBD>";
 			e.label = $"rank {whichRank}: {winnerString}";
 		});
 	}
+
 	private static void CollateResults(List<CompleteElectionResults> elections, List<Candidate> winningCandidates, List<Candidate[]> orderOfWinnersIncludingTies) {
 		List<Candidate>? tie = elections.Count > 1 ? new List<Candidate>() : null;
 		for (int i = 0; i < elections.Count; ++i) {
@@ -544,9 +511,9 @@ public class IRV {
 
 	/// <summary>calculates vote heuristics for each candidate</summary>
 	/// <returns>list of candidates</returns>
-	static List<Candidate> SimpleVoteCalc(IList<Ballot> ballots, out Candidate[][] harmonicBorda, out Candidate[][] popularity) {
+	private List<Candidate> SimpleVoteCalc(out Candidate[][] harmonicBorda, out Candidate[][] popularity) {
 		HashSet<Candidate> completeSet = new HashSet<Candidate>();
-		for (int v = 0; v < ballots.Count; ++v) {
+		for (int v = 0; v < ballots!.Count; ++v) {
 			Ballot ballot = ballots[v];
 			if (ballot.vote == null) continue;
 			for (int i = 0; i < ballot.vote.Length; ++i) {
@@ -568,6 +535,7 @@ public class IRV {
 		harmonicBorda = GenerateOrderIncludingTies(candidateList, c => c.harmonicBordaCount);
 		return candidateList;
 	}
+
 	private static Candidate[][] GenerateOrderIncludingTies(IList<Candidate> candidates, Func<Candidate,float> getValue) {
 		int ties = 0;
 		for (int i = 0; i < candidates.Count - 1; ++i) {
@@ -627,25 +595,24 @@ public class IRV {
 		return weightsForThisVisualization;
 	}
 
-	private static IEnumerator<Response> ElectionCalculation(
+	private IEnumerator<Response> ElectionCalculation(
 		HashSet<Candidate> exhastedCandidates,
-		List<Ballot> allBallots,
-		Candidate candidateForExhaustedBallots,
 		Candidate[][] candidatesByPopularity,
 		float pluralityPercentage = 0.5f) {
-		int iterations = 0;
+		int loopGuard = 0;
 		int processedElection = 0;
 		List<CompleteElectionResults> electionsToProcess = new List<CompleteElectionResults>();
 		CompleteElectionResults result = new CompleteElectionResults(candidateForExhaustedBallots);// TODO test this code with null as the exhausted candidate.
 		result.ExhaustCandidates(exhastedCandidates);
-		result.AddVoteCalculationState(allBallots);
+		result.AddVoteCalculationState(ballots!);
 		if (result.IsExhausted()) {
 			yield return Response.Success(electionsToProcess);
 			yield break;
 		}
 		electionsToProcess.Add(result);
+		int mostIterationsReasonablyPossible = candidatesByPopularity.Length * candidatesByPopularity.Length;
 		do {
-			if (++iterations > 10000) throw new Exception("too many iterations");
+			if (++loopGuard > mostIterationsReasonablyPossible) throw new Exception("too many iterations");
 			bool winnerFound = result.CalculateWinner(pluralityPercentage, out float voteCount);
 			if (winnerFound || result.IsExhausted()) {
 				yield return Response.Processing(electionsToProcess);
@@ -655,18 +622,16 @@ public class IRV {
 					result = electionsToProcess[processedElection];
 				}
 			}
-			CountVoteExtremes(result.CurrentCandidateVoteTallies, out float leastVotes, out float mostVotes, candidateForExhaustedBallots);
+			CountVoteExtremes(result.CurrentCandidateVoteTallies, out float leastVotes, out float mostVotes);
 			Candidate? largestMinimumVoterBloc = GetFirstUnexhaustedCandidate(candidatesByPopularity, exhastedCandidates);
 			float futureVoteCountEstimate = largestMinimumVoterBloc?.totalVotesWeighted ?? voteCount;
 			// before doing the standard remove-the-current-loser logic, clear out the extremely weak candidates that could never win.
 			// eliminates the chance that statistical noise could remove an actual popular choice
 			if (!TryGetTrulyWeakestCandidates(result.CurrentCandidateVoteTallies, futureVoteCountEstimate, pluralityPercentage, candidatesByPopularity, out List<Candidate> losers)) {
-				losers = GetLosers(result.CurrentCandidateVoteTallies, leastVotes, candidateForExhaustedBallots);
+				losers = GetLosers(result.CurrentCandidateVoteTallies, leastVotes);
 			}
 			losers.Sort((a, b) => { return a.totalVotesWeighted != b.totalVotesWeighted ? a.totalVotesWeighted.CompareTo(b.totalVotesWeighted) : a.harmonicBordaCount.CompareTo(b.harmonicBordaCount); });
-			if (losers.Count > 1) {
-				Log.v($"tie for worst: {string.Join(", ", losers)}\n");
-			}
+			if (losers.Count > 1) { Log.v($"tie for worst: {string.Join(", ", losers)}\n"); }
 			for (int i = 0; i < losers.Count; i++) {
 				CompleteElectionResults election;
 				if (i == 0) {
@@ -683,6 +648,7 @@ public class IRV {
 		} while (processedElection < electionsToProcess.Count);
 		yield return Response.Success(electionsToProcess);
 	}
+
 	public static Candidate? GetFirstUnexhaustedCandidate(Candidate[][] candidatesByPopularity, HashSet<Candidate> exhastedCandidates) {
 		for (int i = 0; i < candidatesByPopularity.Length; ++i) {
 			for (int j = 0; j < candidatesByPopularity[i].Length; ++j) {
@@ -693,8 +659,9 @@ public class IRV {
 		}
 		return null;
 	}
+
 	public static bool TryGetTrulyWeakestCandidates(VotesPerCandidate state, float voteCount, float pluralityPercentage, Candidate[][] likelyOrder,
-		[NotNullWhen(true)] out List<Candidate>? losers) {
+		[NotNullWhen(true)] out List<Candidate> losers) {
 		int minRequiredToWin = (int)(voteCount * pluralityPercentage);
 		HashSet<Candidate> extremelyWeakCandidates = new HashSet<Candidate>();
 		foreach (var kvp in state) {
@@ -715,10 +682,10 @@ public class IRV {
 		}
 		return false;
 	}
-	public static List<Candidate> GetLosers(VotesPerCandidate tally, float leastVotes, Candidate fullyExhausted) {
+	public List<Candidate> GetLosers(VotesPerCandidate tally, float leastVotes) {
 		List<Candidate> losers = new List<Candidate>();
 		foreach (var k in tally) {
-			if (k.Key == fullyExhausted) continue;
+			if (k.Key == candidateForExhaustedBallots) continue;
 			float voteCountOfCandidate = SumVoteValue(k.Value);
 			if (voteCountOfCandidate <= leastVotes) {
 				if (k.Key == null) { Log.e("why is null losing?... how is null a valid key?"); continue; }
@@ -727,11 +694,11 @@ public class IRV {
 		}
 		return losers;
 	}
-	public static void CountVoteExtremes(VotesPerCandidate tally, out float leastVotes, out float mostVotes, Candidate candidateForExhaustedVotes) {
+	public void CountVoteExtremes(VotesPerCandidate tally, out float leastVotes, out float mostVotes) {
 		leastVotes = float.PositiveInfinity;
 		mostVotes = float.NegativeInfinity;
 		foreach (var k in tally) {
-			if (k.Key == candidateForExhaustedVotes) continue;
+			if (k.Key == candidateForExhaustedBallots) continue;
 			float voteCount = SumVoteValue(k.Value);
 			if (voteCount < leastVotes) { leastVotes = voteCount; }
 			if (voteCount > mostVotes) { mostVotes = voteCount; }
@@ -745,37 +712,37 @@ public class IRV {
 		}
 		return sumVotes;
 	}
+}
 
-	public static class IncrementingString {
-		public delegate bool ReturnTrueToContinue(string test);
-		/// <summary>brute-force run through every string</summary>
-		/// <param name="returnsTrueToContinue">the function that checks each string. keep returning true to keep the loop going.</param>
-		public static void UniqueStringTest(ReturnTrueToContinue returnsTrueToContinue, char minChar = (char)33, char maxCharInclusive = (char)126) {
-			bool collision;
-			string test = minChar.ToString();
-			do {
-				collision = returnsTrueToContinue(test);
-				if (collision) {
-					test = GetNext(test, minChar, maxCharInclusive);
-				}
-			} while (collision);
-		}
-		static string ReplaceAt(string str, int index, char c) => str.Substring(0, index) + c + str.Substring(index + 1);
-		static string IncrementCharAtIndex(string str, int index) => ReplaceAt(str, index, (char)(str[index] + 1));
-		static string GetNext(string test, char minChar = (char)33, char maxCharInclusive = (char)126) {
-			if (test.Length == 0) return minChar.ToString();
-			int index = 0;
-			char c;
-			do {
-				test = IncrementCharAtIndex(test, index);
-				c = test[index];
-				if (c > maxCharInclusive) {
-					test = ReplaceAt(test, index, minChar);
-					index++;
-					if (index >= test.Length) { test += minChar; return test; }
-				}
-			} while (c > maxCharInclusive);
-			return test;
-		}
+public static class IncrementingString {
+	public delegate bool ReturnTrueToContinue(string test);
+	/// <summary>brute-force run through every string</summary>
+	/// <param name="returnsTrueToContinue">the function that checks each string. keep returning true to keep the loop going.</param>
+	public static void UniqueStringTest(ReturnTrueToContinue returnsTrueToContinue, char minChar = (char)33, char maxCharInclusive = (char)126) {
+		bool collision;
+		string test = minChar.ToString();
+		do {
+			collision = returnsTrueToContinue(test);
+			if (collision) {
+				test = GetNext(test, minChar, maxCharInclusive);
+			}
+		} while (collision);
+	}
+	static string ReplaceAt(string str, int index, char c) => str.Substring(0, index) + c + str.Substring(index + 1);
+	static string IncrementCharAtIndex(string str, int index) => ReplaceAt(str, index, (char)(str[index] + 1));
+	static string GetNext(string test, char minChar = (char)33, char maxCharInclusive = (char)126) {
+		if (test.Length == 0) return minChar.ToString();
+		int index = 0;
+		char c;
+		do {
+			test = IncrementCharAtIndex(test, index);
+			c = test[index];
+			if (c > maxCharInclusive) {
+				test = ReplaceAt(test, index, minChar);
+				index++;
+				if (index >= test.Length) { test += minChar; return test; }
+			}
+		} while (c > maxCharInclusive);
+		return test;
 	}
 }
