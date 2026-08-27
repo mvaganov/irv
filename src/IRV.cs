@@ -6,7 +6,7 @@ using VotesPerCandidate = Dictionary<Candidate, List<Ballot>>;
 
 public class Candidate {
 	public string name;
-	public Color color = Color.clear; // clear will be replaced automatically
+	public Color color = Color.clear; // replaced by Color.AssignUniqueColors
 	public float harmonicBordaCount = 0;
 	public float totalVotesWeighted = 0;
 	public int totalBallots = 0;
@@ -17,32 +17,29 @@ public class Candidate {
 }
 public class Ballot {
 	public string? id;
-	public Candidate[]? vote;
-	public float voteWeight = 1;
-	public override string? ToString() => (vote != null ? "[" + string.Join(", ", Array.ConvertAll(vote, v => v.name)) + "]" : "")
-		+ (voteWeight != 1 ? $"({voteWeight})" : "");
+	public Candidate[]? RankedVote;
+	public float BallotWeight = 1; // allows votes to count more or less than others
+	public override string? ToString() => (RankedVote != null ? "[" + string.Join(", ", Array.ConvertAll(RankedVote, v => v.name)) + "]" : "")
+		+ (BallotWeight != 1 ? $"({BallotWeight})" : "");
 	public int GetBestChoiceIndex(HashSet<Candidate> exhastedCandidates) {
-		if (vote == null) { return -1; }
-		for (int i = 0; i < vote.Length; ++i) {
-			if (!exhastedCandidates.Contains(vote[i])) {
+		if (RankedVote == null) { return -1; }
+		for (int i = 0; i < RankedVote.Length; ++i) {
+			if (!exhastedCandidates.Contains(RankedVote[i])) {
 				return i;
 			}
 		}
 		return -1;
 	}
 	public Candidate? GetBestChoice(HashSet<Candidate> exhastedCandidates) {
-		if (vote == null) return null;
+		if (RankedVote == null) return null;
 		int index = GetBestChoiceIndex(exhastedCandidates);
-		return index >= 0 ? vote[index] : null;
+		return index >= 0 ? RankedVote[index] : null;
 	}
 }
 public class VoteVisualization {
-	//public IList<Candidate>? winner;
-	public IList<Candidate> candidates;
 	/// <summary>data to describe graphical representation [IRV rank][candidate]</summary>
 	public List<List<VoteBloc>> data;
 	public VoteVisualization(IList<Candidate> candidates, List<List<VoteBloc>> data) {
-		this.candidates = candidates;
 		this.data = data;
 	}
 	public static VoteVisualization Create(
@@ -140,6 +137,9 @@ public class VoteBloc {
 	public VoteBloc(Candidate candidate, int start, int ballots) {
 		this.candidate = candidate; position = start; ballotCount = ballots;
 	}
+	public VoteBloc(VoteBloc other) {
+		candidate = other.candidate; position = other.position; ballotCount = other.ballotCount;
+	}
 
 	/// <summary>voters are in a line, clumping with their top candidate</summary>
 	public static void CalculateMigrations(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted,
@@ -221,36 +221,34 @@ public class VoteBloc {
 	}
 }
 
-/// <summary>
-/// Complete results  of an election
-/// </summary>
+/// <summary>Complete results  of an election</summary>
 public class CompleteElectionResults {
-	/// <summary>when ballots are exhausted, they should count for this candidate TODO implement so this argument can stop being passed everywhere</summary>
+	/// <summary>when ballots are exhausted, they should count for this candidate</summary>
 	public Candidate? candidateForExhausted;
 	/// <summary>candidates who were exhausted, not allowed to win</summary>
 	public HashSet<Candidate> exhaustedCandidates;
 	/// <summary>state of votes after each candidate elimination</summary>
-	public List<VotesPerCandidate> out_voteState;
+	public List<VotesPerCandidate> voteState;
 	/// <summary>where ballows travelled to between each state</summary>
-	public List<Dictionary<Candidate, VotesPerCandidate>> out_voteMigrationHistory;
+	public List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory;
 	public List<Ballot> exhaustedBallots = new List<Ballot>();
-	/// <summary>if not null, this is the list of winners. a tie is possible if plurality is less than 50%. TODO determine if a tie really is possible... what happens if multiple plurality is possible after another disqualification?</summary>
+	/// <summary>list of winner. Tie possible if plurality is less than majority</summary>
 	public IList<Candidate>? winner;
 	public VoteVisualization? visualization;
 	public string? label;
-	public VotesPerCandidate CurrentCandidateVoteTallies => out_voteState[out_voteState.Count - 1];
+	public VotesPerCandidate CurrentCandidateVoteTallies => voteState[voteState.Count - 1];
 	public CompleteElectionResults(Candidate? candidateForExhausted) {
 		this.candidateForExhausted = candidateForExhausted;
 		exhaustedCandidates = new HashSet<Candidate>();
-		out_voteState = new List<VotesPerCandidate>();
-		out_voteMigrationHistory = new List<Dictionary<Candidate, VotesPerCandidate>>();
+		voteState = new List<VotesPerCandidate>();
+		voteMigrationHistory = new List<Dictionary<Candidate, VotesPerCandidate>>();
 		exhaustedBallots = new List<Ballot>();
 	}
 	public CompleteElectionResults(CompleteElectionResults other) {
 		candidateForExhausted = other.candidateForExhausted;
 		exhaustedCandidates = new HashSet<Candidate>(other.exhaustedCandidates);
-		out_voteState = new List<VotesPerCandidate>(other.out_voteState);
-		out_voteMigrationHistory = new List<Dictionary<Candidate, VotesPerCandidate>>(other.out_voteMigrationHistory);
+		voteState = new List<VotesPerCandidate>(other.voteState);
+		voteMigrationHistory = new List<Dictionary<Candidate, VotesPerCandidate>>(other.voteMigrationHistory);
 		exhaustedBallots = new List<Ballot>(other.exhaustedBallots);
 		if (other.winner != null) { winner = new List<Candidate>(other.winner); }
 		if (other.label != null) { label = other.label; }
@@ -260,14 +258,13 @@ public class CompleteElectionResults {
 	}
 	public void AddVoteCalculationState(List<Ballot> allBallots) {
 		VotesPerCandidate tally = new VotesPerCandidate();
-		TallyVotes(tally, allBallots, exhaustedCandidates, candidateForExhausted);
-		out_voteState.Add(tally);
+		TallyVotes(tally, allBallots, exhaustedCandidates);
+		voteState.Add(tally);
 	}
 
 	/// <param name="out_tally">a table of all of the votes, seperated by vote winner</param>
 	/// <param name="exhastedCandidates">candidates who should not count (move to the next choice in the vote's ranked list)</param>
-	/// <param name="candidateForExhausted">candidate that takes fully exuausted ballots</param>
-	public static void TallyVotes(VotesPerCandidate out_tally, List<Ballot> ballots, HashSet<Candidate> exhastedCandidates, Candidate? candidateForExhausted) {
+	public void TallyVotes(VotesPerCandidate out_tally, List<Ballot> ballots, HashSet<Candidate> exhastedCandidates) {
 		for (int i = 0; i < ballots.Count; ++i) {
 			Ballot b = ballots[i];
 			Candidate? bestChoice = b.GetBestChoice(exhastedCandidates);
@@ -282,7 +279,7 @@ public class CompleteElectionResults {
 	}
 
 	public void DuplicateLatestState() {
-		out_voteState.Add(CloneVotesPerCandidate(CurrentCandidateVoteTallies));
+		voteState.Add(CloneVotesPerCandidate(CurrentCandidateVoteTallies));
 	}
 	static VotesPerCandidate CloneVotesPerCandidate(VotesPerCandidate tally) {
 		VotesPerCandidate cloned = new VotesPerCandidate();
@@ -331,7 +328,7 @@ public class CompleteElectionResults {
 		Dictionary<Candidate, VotesPerCandidate> changesThisTime = new Dictionary<Candidate, VotesPerCandidate>();
 		VotesPerCandidate votesMoveTo = new VotesPerCandidate();
 		changesThisTime[candidate] = votesMoveTo;
-		out_voteMigrationHistory.Add(changesThisTime);
+		voteMigrationHistory.Add(changesThisTime);
 		for (int i = 0; i < votes.Count; ++i) {
 			Ballot ballot = votes[i];
 			Candidate? next = ballot.GetBestChoice(exhaustedCandidates);
@@ -369,13 +366,14 @@ public class CompleteElectionResults {
 }
 
 public class IRV {
-	/// <summary>where votes go when none of their candidates survived the runoff</summary>
 	public static readonly Candidate BasicExhaustedCandidate = new Candidate(".", Color.darkGray);
 	public List<Ballot>? ballots;
+	/// <summary>where votes go when none of their candidates survived the runoff</summary>
 	public Candidate? candidateForExhaustedBallots;
 	public Candidate[][]? orderHarmonicBorda;
 	public Candidate[][]? orderPopularity;
 	public Candidate[][]? orderInstantRunoff;
+	public List<Candidate>? candidates;
 	public List<List<CompleteElectionResults>>? instantRunoffElectionsByRank;
 	/// <param name="originalBallots"></param>
 	/// <param name="maxWinnersCalculated">how many winners to calculate. -1 to calculate complete ranking</param>
@@ -388,7 +386,7 @@ public class IRV {
 			yield return Response.Error("Ballot ingestion failure");
 			yield break;
 		}
-		List<Candidate> candidates = SimpleVoteCalc(out orderHarmonicBorda, out orderPopularity);
+		candidates = SimpleVoteCalc(out orderHarmonicBorda, out orderPopularity);
 		FillInUnassignedColors(candidates);
 		candidateForExhaustedBallots = GenerateExhaustedCandidatePlaceholder(candidates);
 		instantRunoffElectionsByRank = new List<List<CompleteElectionResults>>();
@@ -470,7 +468,7 @@ public class IRV {
 		for (int i = 0; elections != null && i < elections.Count; ++i) {
 			CompleteElectionResults election = elections[i];
 			VoteVisualization visualization = VoteVisualization.Create(
-				election.out_voteState, election.out_voteMigrationHistory, candidateForExhaustedBallots, candidatesInOrder);
+				election.voteState, election.voteMigrationHistory, candidateForExhaustedBallots, candidatesInOrder);
 			election.visualization = visualization;
 		}
 	}
@@ -515,17 +513,17 @@ public class IRV {
 		HashSet<Candidate> completeSet = new HashSet<Candidate>();
 		for (int v = 0; v < ballots!.Count; ++v) {
 			Ballot ballot = ballots[v];
-			if (ballot.vote == null) continue;
-			for (int i = 0; i < ballot.vote.Length; ++i) {
-				Candidate candidate = ballot.vote[i];
+			if (ballot.RankedVote == null) continue;
+			for (int i = 0; i < ballot.RankedVote.Length; ++i) {
+				Candidate candidate = ballot.RankedVote[i];
 				if (completeSet.Add(candidate)) {
 					candidate.totalBallots = 0;
 					candidate.totalVotesWeighted = 0;
 					candidate.harmonicBordaCount = 0;
 				}
 				candidate.totalBallots += 1;
-				candidate.totalVotesWeighted += ballot.voteWeight;
-				candidate.harmonicBordaCount += (1 / (i + 1.0f)) * ballot.voteWeight;
+				candidate.totalVotesWeighted += ballot.BallotWeight;
+				candidate.harmonicBordaCount += (1 / (i + 1.0f)) * ballot.BallotWeight;
 			}
 		}
 		List<Candidate> candidateList = completeSet.ToList();
@@ -562,11 +560,13 @@ public class IRV {
 
 	static Candidate GenerateExhaustedCandidatePlaceholder(List<Candidate> listOfCandidates) {
 		Candidate candidateForExhaustedBallots = new Candidate(BasicExhaustedCandidate);
-		IncrementingString.UniqueStringTest((str) => {
-			candidateForExhaustedBallots.name = str;
-			bool canidateHasThisName = listOfCandidates.FindIndex(c => c.name == str) >= 0;
-			return canidateHasThisName;
-		});
+		if (listOfCandidates.FindIndex(c => c.name == candidateForExhaustedBallots.name) >= 0) {
+			IncrementingString.UniqueStringTest((str) => {
+				candidateForExhaustedBallots.name = str;
+				bool canidateHasThisName = listOfCandidates.FindIndex(c => c.name == str) >= 0;
+				return canidateHasThisName;
+			});
+		}
 		return candidateForExhaustedBallots;
 	}
 
@@ -602,7 +602,7 @@ public class IRV {
 		int loopGuard = 0;
 		int processedElection = 0;
 		List<CompleteElectionResults> electionsToProcess = new List<CompleteElectionResults>();
-		CompleteElectionResults result = new CompleteElectionResults(candidateForExhaustedBallots);// TODO test this code with null as the exhausted candidate.
+		CompleteElectionResults result = new CompleteElectionResults(candidateForExhaustedBallots);
 		result.ExhaustCandidates(exhastedCandidates);
 		result.AddVoteCalculationState(ballots!);
 		if (result.IsExhausted()) {
@@ -631,7 +631,7 @@ public class IRV {
 				losers = GetLosers(result.CurrentCandidateVoteTallies, leastVotes);
 			}
 			losers.Sort((a, b) => { return a.totalVotesWeighted != b.totalVotesWeighted ? a.totalVotesWeighted.CompareTo(b.totalVotesWeighted) : a.harmonicBordaCount.CompareTo(b.harmonicBordaCount); });
-			if (losers.Count > 1) { Log.v($"tie for worst: {string.Join(", ", losers)}\n"); }
+			//if (losers.Count > 1) { Log.v($"tie for worst: {string.Join(", ", losers)}\n"); }
 			for (int i = 0; i < losers.Count; i++) {
 				CompleteElectionResults election;
 				if (i == 0) {
@@ -708,7 +708,7 @@ public class IRV {
 	public static float SumVoteValue(IList<Ballot> votes) {
 		float sumVotes = 0;
 		for (int i = 0; i < votes.Count; i++) {
-			sumVotes += votes[i].voteWeight;
+			sumVotes += votes[i].BallotWeight;
 		}
 		return sumVotes;
 	}
