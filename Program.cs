@@ -1,4 +1,5 @@
-﻿using irv.src;
+﻿using irv;
+using irv.src;
 using src;
 using src.Core;
 using System.Text;
@@ -40,8 +41,12 @@ public class Program {
 			votes.Add(v);
 		}
 		Color.AssignUniqueColors(candidates, c => c.color, (cand, colr) => cand.color = colr);
-		ShowAllBallots(votes, candidates);
-		Console.ReadKey();
+		Print.ShowAllBallots(votes, candidates);
+		//Print.Pause();
+		Print.ShowAllBallotsSortedByCandidate(votes, candidates);
+		//Print.Pause();
+		Print.Clear();
+
 		//for(int i = 0; i < votes.Count; ++i) { Log.WriteLine(votes[i]); }
 		IRV irv = new IRV();
 		IEnumerator<Response> iter = irv.Calc(votes);
@@ -60,6 +65,7 @@ public class Program {
 					if (election.visualization == null) continue;
 					Log.WriteLine(election.label);
 					List<List<VoteBloc>> allStates = election.visualization.data;
+					HashSet<Candidate> exhaustedForVisual = new HashSet<Candidate>(); // TODO add winners
 					for (int i = 0; i < allStates.Count; ++i) {
 						List<VoteBloc> state = allStates[i];
 						//string currentStateDiagram = StateToString(state, out int width);
@@ -92,9 +98,19 @@ public class Program {
 						//if (allStates.Count > i+1) {
 						//	Log.WriteLine(StateToString(allStates[i + 1], out width));
 						//}
-						ShowFancyVisual(state, 100);
+						HashSet<Candidate> exhaustedThisTime = new HashSet<Candidate>();
+						Dictionary<Candidate, List<Ballot>>? next_vState = i < election.voteState.Count-1 ? election.voteState[i + 1] : null;
+						Print.ShowFancyVisual(state, candidates, 100, exhaustedThisTime, election.voteState[i], next_vState);
+						// TODO show full ballot visualization as part of fancy visual.
+						// after candidate is dropped, show all ballots, tick the candidate off, then go back to compressed line form
+
+						//Dictionary<Candidate, List<Ballot>> votesPerCandidate = election.voteState[i];
+						//ShowAllBallotsSortedByCandidate(votesPerCandidate, candidates, exhaustedForVisual, exhaustedThisTime);
+						//Log.d(""); Console.ReadKey();
+						foreach (Candidate c in exhaustedThisTime) exhaustedForVisual.Add(c);
 					}
 					//Log.d("------------------ winner: " + string.Join(", ", election.winner));
+
 				}
 			}
 			switch (response.CommandState) {
@@ -142,153 +158,6 @@ public class Program {
 				color[x] = candidateColor;
 			}
 		}
-	}
-	public IList<VoteBloc>? ConvertBlocToMigrantBlocs(VoteBloc bloc, bool from) {
-		if (bloc.migrations == null) return null;
-		VoteBloc[] migrants = new VoteBloc[bloc.migrations.Count];
-		for(int i = 0; i < bloc.migrations.Count; ++i) {
-			VoteBloc.Migration migration = bloc.migrations[i];
-			migrants[i] = new VoteBloc(migration.newBoss, from ? migration.fromPosition : migration.toPosition, migration.count);
-		}
-		return migrants;
-	}
-	public static void ShowAllBallots(IList<Ballot> ballots, IList<Candidate> candidates) {
-		int height = candidates.Count;
-		int width = ballots.Count;
-		char[][] text = new char[height][];
-		ConsoleColor[][] color = new ConsoleColor[height][];
-		for (int row = 0; row < height; ++row) {
-			text[row] = new char[width];
-			color[row] = new ConsoleColor[width];
-			for (int col = 0; col < width; ++col) {
-				text[row][col] = ' ';
-				color[row][col] = ConsoleColor.Gray;
-				Ballot b = ballots[col];
-				if (b.RankedVote == null || row >= b.RankedVote.Length) continue;
-				Candidate c = b.RankedVote[row];
-				text[row][col] = c.name[0];
-				color[row][col] = c.color;
-			}
-		}
-		RenderConsoleBuffer(text, color, 10);
-	}
-	public static void ShowFancyVisual(IList<VoteBloc> from, int width) {
-		int height = 2;
-		char[][] text = new char[height][];
-		ConsoleColor[][] color = new ConsoleColor[height][];
-		void Render(int delay) => RenderConsoleBuffer(text, color, delay);
-		for (int i = 0; i < height; ++i) {
-			text[i] = new char[width];
-			color[i] = new ConsoleColor[width];
-		}
-		// draw start
-		DrawVoteBlocsToLine(from, text[0], color[0]);
-		DrawVoteBlocsToLine(null, text[1], color[1]);
-		Render(500);
-
-		List<VoteBloc> normalBlocs = new List<VoteBloc>();
-		List<VoteBloc> normalBlocsEnd = new List<VoteBloc>();
-		List<VoteBloc> movingBlocs = new List<VoteBloc>();
-		List<VoteBloc> movingBlocsEnd = new List<VoteBloc>();
-		List<VoteBloc> exhaustedBlocs = new List<VoteBloc>();
-		// calculate start and end positions of normal blocs and moving blocs
-		for (int i = 0; i < from.Count; ++i) {
-			List<VoteBloc.Migration>? migrations = from[i].migrations;
-			if (migrations == null) continue;
-			if (migrations.Count == 1 && migrations[0].newBoss == from[i].candidate) {
-				VoteBloc start = new VoteBloc(from[i]);
-				VoteBloc end = new VoteBloc(from[i]);
-				end.position = migrations[0].toPosition;
-				normalBlocs.Add(start);
-				normalBlocsEnd.Add(end);
-			} else {
-				exhaustedBlocs.Add(new VoteBloc(from[i]));
-				for (int m = 0; m < migrations.Count; ++m) {
-					VoteBloc.Migration migration = migrations[m];
-					VoteBloc start = new VoteBloc(migration.newBoss, migration.fromPosition, migration.count);
-					VoteBloc end = new VoteBloc(start);
-					end.position = migration.toPosition;
-					movingBlocs.Add(start);
-					movingBlocsEnd.Add(end);
-				}
-			}
-		}
-
-		// calculate bloc animations
-		List<Lerping> lerps = new List<Lerping>();
-		for (int i = 0; i < normalBlocs.Count; ++i) {
-			VoteBloc bloc = normalBlocs[i];
-			lerps.Add(new Lerping(bloc.position, normalBlocsEnd[i].position, p => bloc.position = (int)p));
-		}
-		for (int i = 0; i < movingBlocs.Count; ++i) {
-			VoteBloc bloc = movingBlocs[i];
-			lerps.Add(new Lerping(bloc.position, movingBlocsEnd[i].position, p => bloc.position = (int)p));
-		}
-
-		// drop exhausted candidate
-		DrawVoteBlocsToLine(normalBlocs, text[0], color[0]);
-		DrawVoteBlocsToLine(exhaustedBlocs, text[1], color[1]);
-		Render(500);
-
-		char[] exhaustedAnimating = new char[width];
-		char[] exhaustedConverted = new char[width];
-		ConsoleColor[] exhastedAnimatingColor = new ConsoleColor[width];
-		ConsoleColor[] exhastedConvertedColor = new ConsoleColor[width];
-		DrawVoteBlocsToLine(exhaustedBlocs, exhaustedAnimating, exhastedAnimatingColor);
-		DrawVoteBlocsToLine(movingBlocs, exhaustedConverted, exhastedConvertedColor);
-
-		// convert to next blocs
-		int differenceFound = -1;
-		do {
-			differenceFound = -1;
-			for (int i = 0; i < width; ++i) {
-				if (exhaustedAnimating[i] != exhaustedConverted[i] || exhastedAnimatingColor[i] != exhastedConvertedColor[i]) {
-					differenceFound = i;
-					break;
-				}
-			}
-			if (differenceFound >= 0) {
-				exhaustedAnimating[differenceFound] = exhaustedConverted[differenceFound];
-				exhastedAnimatingColor[differenceFound] = exhastedConvertedColor[differenceFound];
-				Array.Copy(exhaustedAnimating, text[1], width);
-				Array.Copy(exhastedAnimatingColor, color[1], width);
-				Render(10);
-			}
-		} while (differenceFound >= 0);
-
-		DrawVoteBlocsToLine(normalBlocs, text[0], color[0]);
-		DrawVoteBlocsToLine(movingBlocs, text[1], color[1]);
-		Render(500);
-		DrawVoteBlocsToLine(normalBlocs, text[0], color[0]);
-		DrawVoteBlocsToLine(movingBlocs, text[1], color[1], '#');
-		Render(100);
-		DrawVoteBlocsToLine(movingBlocs, text[1], color[1], '+');
-		Render(100);
-		DrawVoteBlocsToLine(movingBlocs, text[1], color[1], '-');
-		Render(100);
-
-		if (movingBlocs.Count == 0) { return; }
-
-		// do animation
-		const int maxSteps = 10;
-		for (int i = 0; i < maxSteps; ++i) {
-			float progress = (float)(i + 1) / maxSteps;
-			lerps.ForEach(l => l.Lerp(progress));
-			DrawVoteBlocsToLine(normalBlocs, text[0], color[0]);
-			DrawVoteBlocsToLine(movingBlocs, text[1], color[1], '-');
-			Render(10);
-		}
-	}
-	static void RenderConsoleBuffer(char[][] text, ConsoleColor[][] color, int delay = 10) {
-		Console.SetCursorPosition(0, 0);
-		for (int row = 0; row < text.Length; ++row) {
-			for (int col = 0; col < text[row].Length; ++col) {
-				Console.ForegroundColor = color[row][col];
-				Console.Write(text[row][col]);
-			}
-			Console.WriteLine();
-		}
-		Thread.Sleep(delay);
 	}
 
 	public struct Lerping {

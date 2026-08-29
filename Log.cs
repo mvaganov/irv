@@ -184,9 +184,12 @@ public static class Log {
 			end = text.Length;
 			for (int i = start; i < text.Length; ++i) {
 				c = text[i];
-				if (c == ColorSuffix) {
-					end = i - 1;
-					break;
+				if (c == ColorSuffix && i > 0) {
+					char prev = text[i - 1];
+					if (prev >= '0' && prev <= 'z') {
+						end = i - 1;
+						break;
+					}
 				}
 			}
 			int count = end - start;
