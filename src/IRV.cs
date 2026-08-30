@@ -3,17 +3,82 @@ using src.Core;
 using System.Diagnostics.CodeAnalysis;
 namespace irv.src;
 using VotesPerCandidate = Dictionary<Candidate, List<Ballot>>;
-
-public class Candidate {
+using BallotsTransferingToCandidate = Dictionary<Candidate, List<Ballot>>;
+public class Candidate : IComparable<Candidate> {
 	public string name;
-	public Color color = Color.clear; // replaced by Color.AssignUniqueColors
-	public float harmonicBordaCount = 0;
-	public float totalVotesWeighted = 0;
+	/// <summary>value of <see cref="Color.clear"/> will be replaced by <see cref="FillInUnassignedColors"/></summary>
+	public Color color = Color.clear;
+	private float harmonicBordaCount = 0;
+	private float totalVotesWeighted = 0;
 	public int totalBallots = 0;
+	public float HarmonicBordaCount => harmonicBordaCount;
+	public float TotalVotesWeighted => totalVotesWeighted;
+	public void SetExhaustedPlaceholder() { harmonicBordaCount = totalVotesWeighted = float.NegativeInfinity; }
+	public bool IsExhaustedPlaceholder => harmonicBordaCount == float.NegativeInfinity && totalVotesWeighted == float.NegativeInfinity;
 	override public string ToString() { return name; }
 	public Candidate(string name) { this.name = name; }
 	public Candidate(string name, Color color) { this.name = name; this.color = color; }
 	public Candidate(Candidate copy) { name = copy.name; color = copy.color; harmonicBordaCount = copy.harmonicBordaCount; totalVotesWeighted = copy.totalVotesWeighted; }
+	public static void FillInUnassignedColors(IList<Candidate> candidates) {
+		Color.AssignUniqueColors(candidates, c => c.color, (candidate, color) => candidate.color = color);
+	}
+
+	/// <summary>calculates vote heuristics for each candidate</summary>
+	/// <returns>list of candidates</returns>
+	public static List<Candidate> SimpleVoteCalc(IList<Ballot> ballots, out Candidate[][] harmonicBorda, out Candidate[][] popularity) {
+		HashSet<Candidate> completeSet = new HashSet<Candidate>();
+		for (int v = 0; v < ballots.Count; ++v) {
+			Ballot ballot = ballots[v];
+			if (ballot.RankedVote == null) continue;
+			for (int i = 0; i < ballot.RankedVote.Length; ++i) {
+				Candidate candidate = ballot.RankedVote[i];
+				if (completeSet.Add(candidate)) {
+					candidate.totalBallots = 0;
+					candidate.totalVotesWeighted = 0;
+					candidate.harmonicBordaCount = 0;
+				}
+				candidate.totalBallots += 1;
+				candidate.totalVotesWeighted += ballot.BallotWeight;
+				candidate.harmonicBordaCount += (1 / (i + 1.0f)) * ballot.BallotWeight;
+			}
+		}
+		List<Candidate> candidateList = completeSet.ToList();
+		candidateList.Sort((a, b) => Math.Sign(b.totalVotesWeighted - a.totalVotesWeighted));
+		popularity = GenerateOrderIncludingTies(candidateList, c => c.harmonicBordaCount);
+		candidateList.Sort((a, b) => Math.Sign(b.harmonicBordaCount - a.harmonicBordaCount));
+		harmonicBorda = GenerateOrderIncludingTies(candidateList, c => c.harmonicBordaCount);
+		return candidateList;
+	}
+
+	private static Candidate[][] GenerateOrderIncludingTies(IList<Candidate> candidates, Func<Candidate, float> getValue) {
+		int ties = 0;
+		for (int i = 0; i < candidates.Count - 1; ++i) {
+			if (getValue(candidates[i]) == getValue(candidates[i + 1])) ++ties;
+		}
+		Candidate[][] order = new Candidate[candidates.Count - ties][];
+		int index = 0;
+		for (int i = 0; i < candidates.Count; ++i) {
+			ties = 0;
+			for (int j = i; j < candidates.Count - 1; j++) {
+				if (getValue(candidates[j]) != getValue(candidates[j + 1])) break;
+				++ties;
+			}
+			order[index] = new Candidate[ties + 1];
+			order[index][0] = candidates[i];
+			for (int j = 0; j < ties; j++) {
+				order[index][j + 1] = candidates[i + 1 + j];
+			}
+			++index;
+			i += ties;
+		}
+		return order;
+	}
+
+	public int CompareTo(Candidate? other) {
+		return other == null ? 1
+			: TotalVotesWeighted != other.TotalVotesWeighted ? TotalVotesWeighted.CompareTo(other.TotalVotesWeighted)
+			: HarmonicBordaCount.CompareTo(other.HarmonicBordaCount);
+	}
 }
 public class Ballot {
 	public string? id;
@@ -125,11 +190,11 @@ public class VoteVisualization {
 	}
 	public static VoteVisualization Create(
 		List<VotesPerCandidate> voteStateHistory,
-		List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory,
-		Candidate? candidateForExausted,
+		List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory,
+		Candidate? candidateForExhausted,
 		IList<Candidate> candidatesListing) {
 		List<List<VoteBloc>> visBlocs = new List<List<VoteBloc>>();
-		CalculateVisBlocsBasedOnHistory(visBlocs, voteStateHistory, voteMigrationHistory, candidateForExausted);
+		CalculateVisBlocsBasedOnHistory(visBlocs, voteStateHistory, voteMigrationHistory, candidateForExhausted);
 		VoteVisualization sr = new VoteVisualization(candidatesListing, visBlocs);
 		return sr;
 	}
@@ -142,7 +207,7 @@ public class VoteVisualization {
 	public static void CalculateVisBlocsBasedOnHistory(
 		List<List<VoteBloc>> out_visBlocs,
 		List<VotesPerCandidate> voteStateHistory,
-		List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory, Candidate? candidateForExhausted) {
+		List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory, Candidate? candidateForExhausted) {
 		List<VoteBloc> blocsThisState;
 		List<VoteBloc>? blocsLastState = null;
 		Dictionary<Candidate, float> weightsForThisVisualization = IRV.CalculateWeightByStateImportance(voteStateHistory);
@@ -226,7 +291,7 @@ public class VoteBloc {
 
 	/// <summary>voters are in a line, clumping with their top candidate</summary>
 	public static void CalculateMigrations(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted,
-		Dictionary<Candidate, VotesPerCandidate> voteMigration) {
+		Dictionary<Candidate, BallotsTransferingToCandidate> voteMigration) {
 		List<Candidate> properOrderOfCandidatesInState = CalculateProperOrderOfAllCandidatesBetweenTwoStates(
 			blocsThisState, blocsLastState, candidateForExhausted);
 		Dictionary<Candidate, int> whereVotesComeFrom = new Dictionary<Candidate, int>();
@@ -247,7 +312,7 @@ public class VoteBloc {
 			if (!whereVotesComeFrom.TryGetValue(candidate, out _)) {
 				whereVotesComeFrom[candidate] = lastBloc.position;
 			}
-			if (!voteMigration.TryGetValue(candidate, out VotesPerCandidate? whereTheVotesAreGoing)) {
+			if (!voteMigration.TryGetValue(candidate, out BallotsTransferingToCandidate? whereTheVotesAreGoing)) {
 				continue;
 			}
 			int votesMoved = 0;
@@ -309,41 +374,43 @@ public class CompleteElectionResults {
 	/// <summary>when ballots are exhausted, they should count for this candidate</summary>
 	public Candidate? candidateForExhausted;
 	/// <summary>candidates who were exhausted, not allowed to win</summary>
-	public HashSet<Candidate> exhaustedCandidates; // TODO delete, and use the version in voteState
+	public HashSet<Candidate> exhaustedCandidates; // TODO delete, and use the version in `CurrentCandidateVoteTallies`
 	/// <summary>state of votes after each candidate elimination</summary>
-	public List<VotesPerCandidate> voteState;// TODO rename 'voteStates'
+	public List<VotesPerCandidate> voteStates;
 	/// <summary>where ballows travelled to between each state</summary>
-	public List<Dictionary<Candidate, VotesPerCandidate>> voteMigrationHistory;
+	public List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory;
 	public List<Ballot> exhaustedBallots = new List<Ballot>();
 	/// <summary>list of winner. Tie possible if plurality is less than majority</summary>
 	public IList<Candidate>? winner;
 	public VoteVisualization? visualization;
 	public string? label;
-	public VotesPerCandidate CurrentCandidateVoteTallies => voteState[voteState.Count - 1];
+	public VotesPerCandidate CurrentCandidateVoteTallies => voteStates[voteStates.Count - 1];
 	public CompleteElectionResults(Candidate? candidateForExhausted) {
 		this.candidateForExhausted = candidateForExhausted;
 		exhaustedCandidates = new HashSet<Candidate>();
-		voteState = new List<VotesPerCandidate>();
-		voteMigrationHistory = new List<Dictionary<Candidate, VotesPerCandidate>>();
+		if (candidateForExhausted != null) {
+			exhaustedCandidates.Add(candidateForExhausted);
+		}
+		voteStates = new List<VotesPerCandidate>();
+		voteMigrationHistory = new List<Dictionary<Candidate, BallotsTransferingToCandidate>>();
 		exhaustedBallots = new List<Ballot>();
 	}
 	public CompleteElectionResults(CompleteElectionResults other) {
 		candidateForExhausted = other.candidateForExhausted;
 		exhaustedCandidates = new HashSet<Candidate>(other.exhaustedCandidates);
-		voteState = new List<VotesPerCandidate>(other.voteState);
-		voteMigrationHistory = new List<Dictionary<Candidate, VotesPerCandidate>>(other.voteMigrationHistory);
+		voteStates = new List<VotesPerCandidate>(other.voteStates);
+		voteMigrationHistory = new List<Dictionary<Candidate, BallotsTransferingToCandidate>>(other.voteMigrationHistory);
 		exhaustedBallots = new List<Ballot>(other.exhaustedBallots);
 		if (other.winner != null) { winner = new List<Candidate>(other.winner); }
 		if (other.label != null) { label = other.label; }
 	}
-	// TODO rename `AddExhaustedCandidates`
-	public void ExhaustCandidates(IEnumerable<Candidate> candidates) {
+	public void AddExhaustedCandidates(IEnumerable<Candidate> candidates) {
 		foreach (Candidate c in candidates) exhaustedCandidates.Add(c);
 	}
 	public void AddVoteCalculationState(List<Ballot> allBallots) {
 		VotesPerCandidate tally = new VotesPerCandidate();
 		TallyVotes(tally, allBallots, exhaustedCandidates);
-		voteState.Add(tally);
+		voteStates.Add(tally);
 		//Print.DebugShow(tally, exhaustedCandidates);
 	}
 
@@ -373,12 +440,12 @@ public class CompleteElectionResults {
 	}
 	public static void OrderByBallotCount(VotesPerCandidate tally, List<Candidate> out_order) {
 		out_order.Clear(); out_order.AddRange(tally.Keys);
-		out_order.Sort((a,b) => b.totalVotesWeighted.CompareTo(a.totalVotesWeighted));
+		out_order.Sort((a,b) => b.TotalVotesWeighted.CompareTo(a.TotalVotesWeighted));
 	}
 
 	public void DuplicateLatestState() {
 		//voteState.Add(new VoteState(CurrentCandidateVoteTallies)); // TODO use this
-		voteState.Add(CloneVotesPerCandidate(CurrentCandidateVoteTallies));
+		voteStates.Add(CloneVotesPerCandidate(CurrentCandidateVoteTallies));
 	}
 	static VotesPerCandidate CloneVotesPerCandidate(VotesPerCandidate tally) {
 		VotesPerCandidate cloned = new VotesPerCandidate();
@@ -425,8 +492,8 @@ public class CompleteElectionResults {
 		} else {
 			state.Remove(candidate);
 		}
-		Dictionary<Candidate, VotesPerCandidate> changesThisTime = new Dictionary<Candidate, VotesPerCandidate>();
-		VotesPerCandidate votesMoveTo = new VotesPerCandidate();
+		Dictionary<Candidate, BallotsTransferingToCandidate> changesThisTime = new Dictionary<Candidate, BallotsTransferingToCandidate>();
+		BallotsTransferingToCandidate votesMoveTo = new BallotsTransferingToCandidate();
 		changesThisTime[candidate] = votesMoveTo;
 		voteMigrationHistory.Add(changesThisTime);
 		for (int i = 0; i < votes.Count; ++i) {
@@ -487,8 +554,8 @@ public class IRV {
 			yield return Response.Error("Ballot ingestion failure");
 			yield break;
 		}
-		candidates = SimpleVoteCalc(out orderHarmonicBorda, out orderPopularity);
-		FillInUnassignedColors(candidates);
+		candidates = Candidate.SimpleVoteCalc(ballots, out orderHarmonicBorda, out orderPopularity);
+		Candidate.FillInUnassignedColors(candidates);
 		candidateForExhaustedBallots = GenerateExhaustedCandidatePlaceholder(candidates);
 		instantRunoffElectionsByRank = new List<List<CompleteElectionResults>>();
 
@@ -543,10 +610,6 @@ public class IRV {
 		}
 	}
 
-	private static void FillInUnassignedColors(IList<Candidate> candidates) {
-		Color.AssignUniqueColors(candidates, c => c.color, (candidate, color) => candidate.color = color);
-	}
-
 	private static bool AmbiguityInElectionsCollapsesToSingleOutcome(List<CompleteElectionResults> elections) {
 		bool electionResultsAreUnambiguous = true;
 		for (int i = 0; i < elections.Count; ++i) {
@@ -569,7 +632,7 @@ public class IRV {
 		for (int i = 0; elections != null && i < elections.Count; ++i) {
 			CompleteElectionResults election = elections[i];
 			VoteVisualization visualization = VoteVisualization.Create(
-				election.voteState, election.voteMigrationHistory, candidateForExhaustedBallots, candidatesInOrder);
+				election.voteStates, election.voteMigrationHistory, candidateForExhaustedBallots, candidatesInOrder);
 			election.visualization = visualization;
 		}
 	}
@@ -608,57 +671,6 @@ public class IRV {
 		}
 	}
 
-	/// <summary>calculates vote heuristics for each candidate</summary>
-	/// <returns>list of candidates</returns>
-	private List<Candidate> SimpleVoteCalc(out Candidate[][] harmonicBorda, out Candidate[][] popularity) {
-		HashSet<Candidate> completeSet = new HashSet<Candidate>();
-		for (int v = 0; v < ballots!.Count; ++v) {
-			Ballot ballot = ballots[v];
-			if (ballot.RankedVote == null) continue;
-			for (int i = 0; i < ballot.RankedVote.Length; ++i) {
-				Candidate candidate = ballot.RankedVote[i];
-				if (completeSet.Add(candidate)) {
-					candidate.totalBallots = 0;
-					candidate.totalVotesWeighted = 0;
-					candidate.harmonicBordaCount = 0;
-				}
-				candidate.totalBallots += 1;
-				candidate.totalVotesWeighted += ballot.BallotWeight;
-				candidate.harmonicBordaCount += (1 / (i + 1.0f)) * ballot.BallotWeight;
-			}
-		}
-		List<Candidate> candidateList = completeSet.ToList();
-		candidateList.Sort((a, b) => Math.Sign(b.totalVotesWeighted - a.totalVotesWeighted));
-		popularity = GenerateOrderIncludingTies(candidateList, c => c.harmonicBordaCount);
-		candidateList.Sort((a, b) => Math.Sign(b.harmonicBordaCount - a.harmonicBordaCount));
-		harmonicBorda = GenerateOrderIncludingTies(candidateList, c => c.harmonicBordaCount);
-		return candidateList;
-	}
-
-	private static Candidate[][] GenerateOrderIncludingTies(IList<Candidate> candidates, Func<Candidate,float> getValue) {
-		int ties = 0;
-		for (int i = 0; i < candidates.Count - 1; ++i) {
-			if (getValue(candidates[i]) == getValue(candidates[i + 1])) ++ties;
-		}
-		Candidate[][] order = new Candidate[candidates.Count - ties][];
-		int index = 0;
-		for (int i = 0; i < candidates.Count; ++i) {
-			ties = 0;
-			for (int j = i; j < candidates.Count - 1; j++) {
-				if (getValue(candidates[j]) != getValue(candidates[j+1])) break;
-				++ties;
-			}
-			order[index] = new Candidate[ties+1];
-			order[index][0] = candidates[i];
-			for (int j = 0; j < ties; j++) {
-				order[index][j+1] = candidates[i+1+j];
-			}
-			++index;
-			i += ties;
-		}
-		return order;
-	}
-
 	static Candidate GenerateExhaustedCandidatePlaceholder(List<Candidate> listOfCandidates) {
 		Candidate candidateForExhaustedBallots = new Candidate(BasicExhaustedCandidate);
 		if (listOfCandidates.FindIndex(c => c.name == candidateForExhaustedBallots.name) >= 0) {
@@ -668,6 +680,7 @@ public class IRV {
 				return canidateHasThisName;
 			});
 		}
+		candidateForExhaustedBallots.SetExhaustedPlaceholder();
 		return candidateForExhaustedBallots;
 	}
 
@@ -704,7 +717,7 @@ public class IRV {
 		int processedElection = 0;
 		List<CompleteElectionResults> electionsToProcess = new List<CompleteElectionResults>();
 		CompleteElectionResults result = new CompleteElectionResults(candidateForExhaustedBallots);
-		result.ExhaustCandidates(exhastedCandidates);
+		result.AddExhaustedCandidates(exhastedCandidates);
 		result.AddVoteCalculationState(ballots!);
 		if (result.IsExhausted()) {
 			yield return Response.Success(electionsToProcess);
@@ -725,13 +738,13 @@ public class IRV {
 			}
 			CountVoteExtremes(result.CurrentCandidateVoteTallies, out float leastVotes, out float mostVotes);
 			Candidate? largestMinimumVoterBloc = GetFirstUnexhaustedCandidate(candidatesByPopularity, exhastedCandidates);
-			float futureVoteCountEstimate = largestMinimumVoterBloc?.totalVotesWeighted ?? voteCount;
+			float futureVoteCountEstimate = largestMinimumVoterBloc?.TotalVotesWeighted ?? voteCount;
 			// before doing the standard remove-the-current-loser logic, clear out the extremely weak candidates that could never win.
 			// eliminates the chance that statistical noise could remove an actual popular choice
 			if (!TryGetTrulyWeakestCandidates(result.CurrentCandidateVoteTallies, futureVoteCountEstimate, pluralityPercentage, candidatesByPopularity, out List<Candidate> losers)) {
 				losers = GetLosers(result.CurrentCandidateVoteTallies, leastVotes);
 			}
-			losers.Sort((a, b) => { return a.totalVotesWeighted != b.totalVotesWeighted ? a.totalVotesWeighted.CompareTo(b.totalVotesWeighted) : a.harmonicBordaCount.CompareTo(b.harmonicBordaCount); });
+			losers.Sort((a, b) => a.CompareTo(b));
 			//if (losers.Count > 1) { Log.v($"tie for worst: {string.Join(", ", losers)}\n"); }
 			for (int i = 0; i < losers.Count; i++) {
 				CompleteElectionResults election;
@@ -769,7 +782,7 @@ public class IRV {
 		HashSet<Candidate> extremelyWeakCandidates = new HashSet<Candidate>();
 		foreach (var kvp in state) {
 			Candidate canditate = kvp.Key;
-			if (canditate.totalVotesWeighted < minRequiredToWin) {
+			if (canditate.TotalVotesWeighted < minRequiredToWin) {
 				extremelyWeakCandidates.Add(canditate);
 			}
 		}

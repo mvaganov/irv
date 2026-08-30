@@ -35,9 +35,9 @@ public class Print {
 		int stateShowing = 0;
 		HashSet<Candidate>? exhausted = null;
 		HashSet<Candidate>? whoToDrawExpanded = null;
-		int maxState = election.voteState.Count - 1;
+		int maxState = election.voteStates.Count - 1;
 		while (input != 'q') {
-			List<Ballot>? ballots = GetBallotList(election.voteState[stateShowing], irv.candidates!);
+			List<Ballot>? ballots = GetBallotList(election.voteStates[stateShowing], irv.candidates!);
 			ShowAllBallotsSortedByCandidate(ballots, irv.candidates!, exhausted, whoToDrawExpanded);
 			Log.d("qws");
 			input = Console.ReadKey().KeyChar;
