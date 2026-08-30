@@ -25,7 +25,7 @@ public class Candidate : IComparable<Candidate> {
 
 	/// <summary>calculates vote heuristics for each candidate</summary>
 	/// <returns>list of candidates</returns>
-	public static List<Candidate> SimpleVoteCalc(IList<Ballot> ballots, out Candidate[][] harmonicBorda, out Candidate[][] popularity) {
+	public static List<Candidate> InstantVoteCalc(IList<Ballot> ballots, out Candidate[][] harmonicBorda, out Candidate[][] popularity) {
 		HashSet<Candidate> completeSet = new HashSet<Candidate>();
 		for (int v = 0; v < ballots.Count; ++v) {
 			Ballot ballot = ballots[v];
@@ -182,20 +182,24 @@ public class Ballot {
 //		return exhaustedBallots;
 //	}
 //}
+public class VoteStateVisualization {
+	public List<VoteBloc> data;
+	public VoteStateVisualization(List<VoteBloc> data) {
+		this.data = data;
+	}
+}
 public class VoteVisualization {
 	/// <summary>data to describe graphical representation [IRV rank][candidate]</summary>
 	public List<List<VoteBloc>> data;
-	public VoteVisualization(IList<Candidate> candidates, List<List<VoteBloc>> data) {
+	public VoteVisualization(List<List<VoteBloc>> data) {
 		this.data = data;
 	}
 	public static VoteVisualization Create(
 		List<VotesPerCandidate> voteStateHistory,
-		List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory,
-		Candidate? candidateForExhausted,
-		IList<Candidate> candidatesListing) {
+		List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory) {
 		List<List<VoteBloc>> visBlocs = new List<List<VoteBloc>>();
-		CalculateVisBlocsBasedOnHistory(visBlocs, voteStateHistory, voteMigrationHistory, candidateForExhausted);
-		VoteVisualization sr = new VoteVisualization(candidatesListing, visBlocs);
+		CalculateVisBlocsBasedOnHistory(visBlocs, voteStateHistory, voteMigrationHistory);
+		VoteVisualization sr = new VoteVisualization(visBlocs);
 		return sr;
 	}
 	/// <summary>calculate visualization model.</summary>
@@ -204,55 +208,29 @@ public class VoteVisualization {
 	/// Every block exists at some index in a number line, and is the size of it's number of votes</param>
 	/// <param name="voteStateHistory">the state of the votes at each step.</param>
 	/// <param name="voteMigrationHistory">how the votes moved each state.</param>
-	public static void CalculateVisBlocsBasedOnHistory(
-		List<List<VoteBloc>> out_visBlocs,
-		List<VotesPerCandidate> voteStateHistory,
-		List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory, Candidate? candidateForExhausted) {
+	public static void CalculateVisBlocsBasedOnHistory( List<List<VoteBloc>> out_visBlocs, List<VotesPerCandidate> voteStateHistory,
+		List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory) {
 		List<VoteBloc> blocsThisState;
 		List<VoteBloc>? blocsLastState = null;
-		Dictionary<Candidate, float> weightsForThisVisualization = IRV.CalculateWeightByStateImportance(voteStateHistory);
 		for (int stateIndex = 0; stateIndex < voteStateHistory.Count; ++stateIndex) {
-			List<Candidate> sorted = OrderCandidatesForBlocs(voteStateHistory[stateIndex], weightsForThisVisualization, candidateForExhausted, true);
-			blocsThisState = CalculateBlocs(sorted, voteStateHistory[stateIndex], weightsForThisVisualization);
-			out_visBlocs.Add(blocsThisState);
+			List<Candidate> sorted = OrderCandidates(voteStateHistory[stateIndex]);
+			blocsThisState = CalculateBlocs(sorted, voteStateHistory[stateIndex]);
 			bool migrationsFromLastStateIsAvailable = blocsLastState != null;
 			if (migrationsFromLastStateIsAvailable) {
-				VoteBloc.CalculateMigrations(blocsThisState, blocsLastState!, candidateForExhausted, voteMigrationHistory[stateIndex - 1]);
+				VoteBloc.CalculateMigrations(blocsThisState, blocsLastState!, voteMigrationHistory[stateIndex - 1]);
 			}
+			out_visBlocs.Add(blocsThisState);
 			blocsLastState = blocsThisState;
 		}
 	}
 
-	/// <returns>order of choices based on the tally, using tieBreakerData weighting to separate ties.</returns>
-	private static List<Candidate> OrderCandidatesForBlocs(VotesPerCandidate tally, Dictionary<Candidate, float> tieBreakerData,
-		Candidate? candidateForExhausted, bool forceTieBreakerDataAsOrder = false) {
+	private static List<Candidate> OrderCandidates(VotesPerCandidate tally) {
 		List<Candidate> order = new List<Candidate>(tally.Keys);
-		HashSet<Candidate> candidatesInTheVisualization = new HashSet<Candidate>(order);
-		foreach (var kvp in tieBreakerData) {
-			if (candidatesInTheVisualization.Add(kvp.Key)) {
-				order.Add(kvp.Key);
-			}
-		}
-		order.Sort((a, b) => {
-			float countA = tally.TryGetValue(a, out List<Ballot>? ballotsA) ? IRV.SumVoteValue(ballotsA) : 0;
-			float countB = tally.TryGetValue(b, out List<Ballot>? ballotsB) ? IRV.SumVoteValue(ballotsB) : 0;
-			float diff = countB - countA;
-			if (forceTieBreakerDataAsOrder || diff == 0) {
-				diff = tieBreakerData[b] - tieBreakerData[a];
-			}
-			return (int)(diff * 1024);
-		});
-		// ensure that exhausted candidates appear at the end
-		if (candidateForExhausted != null && order[order.Count - 1] != candidateForExhausted) {
-			int exhaustedIndex = order.IndexOf(candidateForExhausted);
-			if (exhaustedIndex >= 0) {
-				order.RemoveAt(exhaustedIndex);
-				order.Add(candidateForExhausted);
-			}
-		}
+		order.Sort((a, b) => b.HarmonicBordaCount.CompareTo(a.HarmonicBordaCount));
 		return order;
 	}
-	public static List<VoteBloc> CalculateBlocs(List<Candidate> sorted, VotesPerCandidate voteState, Dictionary<Candidate, float> candidateWeight) {
+
+	public static List<VoteBloc> CalculateBlocs(List<Candidate> sorted, VotesPerCandidate voteState) {
 		List<VoteBloc> blocsThisState = new List<VoteBloc>();
 		int cursor = 0;
 		for (int s = 0; s < sorted.Count; ++s) {
@@ -267,9 +245,10 @@ public class VoteVisualization {
 }
 public class VoteBloc {
 	public Candidate candidate;
-	public int position;
-	//public int ballotCount;
 	public readonly IReadOnlyList<Ballot> ballots;
+	public int position;
+	/// the next blocs that these votes go into
+	public List<Migration>? migrations;
 	public int ballotCount => ballots.Count;
 	public class Migration {
 		public Candidate newBoss;
@@ -280,8 +259,6 @@ public class VoteBloc {
 			newBoss = destination; this.ballots = ballots; fromPosition = indexFrom; toPosition = indexTo;
 		}
 	}
-	/// the next blocs that these votes go into
-	public List<Migration>? migrations;
 	public VoteBloc(Candidate candidate, int start, IReadOnlyList<Ballot> ballots) {
 		this.candidate = candidate; position = start; this.ballots = ballots;
 	}
@@ -290,10 +267,10 @@ public class VoteBloc {
 	}
 
 	/// <summary>voters are in a line, clumping with their top candidate</summary>
-	public static void CalculateMigrations(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted,
+	public static void CalculateMigrations(List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState,
 		Dictionary<Candidate, BallotsTransferingToCandidate> voteMigration) {
 		List<Candidate> properOrderOfCandidatesInState = CalculateProperOrderOfAllCandidatesBetweenTwoStates(
-			blocsThisState, blocsLastState, candidateForExhausted);
+			blocsThisState, blocsLastState);
 		Dictionary<Candidate, int> whereVotesComeFrom = new Dictionary<Candidate, int>();
 		Dictionary<Candidate, int> whereVotesGoingTo = new Dictionary<Candidate, int>();
 		for (int i = 0; i < properOrderOfCandidatesInState.Count; ++i) {
@@ -346,7 +323,7 @@ public class VoteBloc {
 		}
 	}
 	private static List<Candidate> CalculateProperOrderOfAllCandidatesBetweenTwoStates(
-		List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState, Candidate? candidateForExhausted) {
+		List<VoteBloc> blocsThisState, List<VoteBloc> blocsLastState) {
 		List<Candidate> properOrderOfCandidates = new List<Candidate>();
 		HashSet<Candidate> listed = new HashSet<Candidate>();
 		for (int i = 0; i < blocsLastState.Count; ++i) {
@@ -357,13 +334,6 @@ public class VoteBloc {
 		for (int i = 0; i < blocsThisState.Count; ++i) {
 			Candidate c = blocsLastState[i].candidate;
 			if (!listed.Contains(c)) { properOrderOfCandidates.Add(c); }
-		}
-		if (candidateForExhausted != null) {
-			int index = properOrderOfCandidates.IndexOf(candidateForExhausted);
-			if (index >= 0) {
-				properOrderOfCandidates.RemoveAt(index);
-				properOrderOfCandidates.Add(candidateForExhausted);
-			}
 		}
 		return properOrderOfCandidates;
 	}
@@ -376,7 +346,7 @@ public class CompleteElectionResults {
 	/// <summary>candidates who were exhausted, not allowed to win</summary>
 	public HashSet<Candidate> exhaustedCandidates; // TODO delete, and use the version in `CurrentCandidateVoteTallies`
 	/// <summary>state of votes after each candidate elimination</summary>
-	public List<VotesPerCandidate> voteStates;
+	public List<VotesPerCandidate> voteStates; // TODO is this needed after visualization is done? can we just calculate visualization and not do voteStates?
 	/// <summary>where ballows travelled to between each state</summary>
 	public List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory;
 	public List<Ballot> exhaustedBallots = new List<Ballot>();
@@ -554,7 +524,7 @@ public class IRV {
 			yield return Response.Error("Ballot ingestion failure");
 			yield break;
 		}
-		candidates = Candidate.SimpleVoteCalc(ballots, out orderHarmonicBorda, out orderPopularity);
+		candidates = Candidate.InstantVoteCalc(ballots, out orderHarmonicBorda, out orderPopularity);
 		Candidate.FillInUnassignedColors(candidates);
 		candidateForExhaustedBallots = GenerateExhaustedCandidatePlaceholder(candidates);
 		instantRunoffElectionsByRank = new List<List<CompleteElectionResults>>();
@@ -574,7 +544,7 @@ public class IRV {
 				bool noElectionsCouldBeCalculated = electionVariations.Count == 0;
 				if (noElectionsCouldBeCalculated) break;
 				bool uniquePreferenceDetermined = AmbiguityInElectionsCollapsesToSingleOutcome(electionVariations);
-				GenerateVisualsForEachElection(electionVariations, candidates, candidateForExhaustedBallots);
+				GenerateVisualsForEachElection(electionVariations, candidateForExhaustedBallots);
 				LabelEachElection(electionVariations, place);
 				CollateResults(electionVariations, winningCandidates, winnersIncTies);
 				instantRunoffElectionsByRank.Add(electionVariations);
@@ -628,11 +598,11 @@ public class IRV {
 		return electionResultsAreUnambiguous;
 	}
 
-	private static void GenerateVisualsForEachElection(List<CompleteElectionResults> elections, IList<Candidate> candidatesInOrder, Candidate? candidateForExhaustedBallots) {
+	private static void GenerateVisualsForEachElection(List<CompleteElectionResults> elections, Candidate? candidateForExhaustedBallots) {
 		for (int i = 0; elections != null && i < elections.Count; ++i) {
 			CompleteElectionResults election = elections[i];
-			VoteVisualization visualization = VoteVisualization.Create(
-				election.voteStates, election.voteMigrationHistory, candidateForExhaustedBallots, candidatesInOrder);
+			// TODO move this to `CompleteElectionResults`
+			VoteVisualization visualization = VoteVisualization.Create(election.voteStates, election.voteMigrationHistory);
 			election.visualization = visualization;
 		}
 	}
@@ -697,13 +667,14 @@ public class IRV {
 		for (int s = 0; s < voteStateHistory.Count; ++s) {
 			VotesPerCandidate state = voteStateHistory[s];
 			foreach (KeyValuePair<Candidate, List<Ballot>> kvp in state) {
-				float voteCountOfCandidate = SumVoteValue(kvp.Value);
-				if (weightsForThisVisualization.TryGetValue(kvp.Key, out float val)) {
-					val += voteCountOfCandidate;
-				} else {
-					val = voteCountOfCandidate;
-				}
-				weightsForThisVisualization[kvp.Key] = val;
+				//float voteCountOfCandidate = SumVoteValue(kvp.Value);
+				//if (weightsForThisVisualization.TryGetValue(kvp.Key, out float val)) {
+				//	val += voteCountOfCandidate;
+				//} else {
+				//	val = voteCountOfCandidate;
+				//}
+				//weightsForThisVisualization[kvp.Key] = val;
+				weightsForThisVisualization[kvp.Key] = kvp.Key.HarmonicBordaCount;// TotalVotesWeighted;
 			}
 		}
 		return weightsForThisVisualization;

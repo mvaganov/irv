@@ -291,7 +291,7 @@ public class ConsoleBuffer {
 			Console.SetCursorPosition(0, text.Length);
 		}
 		Console.ForegroundColor = o;
-		Thread.Sleep(delay);
+		Thread.Sleep(delay/10);
 	}
 	public void Copy(ConsoleBuffer other) {
 		if (text == null || text.Length != other.text.Length) text = new char[other.text.Length][];

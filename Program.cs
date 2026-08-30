@@ -42,9 +42,9 @@ public class Program {
 		}
 		Color.AssignUniqueColors(candidates, c => c.color, (cand, colr) => cand.color = colr);
 		Print.ShowAllBallots(votes, candidates);
-		//Print.Pause();
+		Print.Pause();
 		Print.ShowAllBallotsSortedByCandidate(votes, candidates);
-		//Print.Pause();
+		Print.Pause();
 		Print.Clear();
 
 		//for(int i = 0; i < votes.Count; ++i) { Log.WriteLine(votes[i]); }
@@ -154,8 +154,10 @@ public class Program {
 			for (int w = 0; w < bloc.ballotCount; ++w) {
 				char letter = showLetters == '\0' ? GetLetter(candidate.name, w, '.') : showLetters;
 				int x = bloc.position + w;
-				text[x] = letter;
-				color[x] = candidateColor;
+				if (x < text.Length) {
+					text[x] = letter;
+					color[x] = candidateColor;
+				}
 			}
 		}
 	}
