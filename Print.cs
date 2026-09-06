@@ -2,13 +2,14 @@
 using irv.src;
 using src;
 using static Program;
-
 namespace irv;
+
+using VotesPerCandidate = VoteState;//Dictionary<Candidate, List<Ballot>>;
 public class Print {
 	public static ConsoleBuffer buffer = new ConsoleBuffer(), back = new ConsoleBuffer();
 	static Print() {
 	}
-	public static void DebugShow(Dictionary<Candidate, List<Ballot>> tally, HashSet<Candidate> exhaustedCandidates) {
+	public static void DebugShow(VotesPerCandidate tally, HashSet<Candidate> exhaustedCandidates) {
 		List<Candidate> inOrder = CompleteElectionResults.OrderByBallotCount(tally);
 		ShowAllBallotsSortedByCandidate(tally, inOrder, exhaustedCandidates, null);
 		int w = 100;
@@ -58,15 +59,15 @@ public class Print {
 		return migrants;
 	}
 	public static void ShowAllBallotsSortedByCandidate(IList<Ballot> ballots, IList<Candidate> candidates, HashSet<Candidate>? exhausted = null, HashSet<Candidate>? whoToDrawExpanded = null) {
-		Dictionary<Candidate, List<Ballot>> votesPerCandidate = new Dictionary<Candidate, List<Ballot>>();
+		VotesPerCandidate votesPerCandidate = new VotesPerCandidate();
 		CompleteElectionResults.TallyVotes(votesPerCandidate, ballots, exhausted, null);
 		ShowAllBallotsSortedByCandidate(votesPerCandidate, candidates, exhausted, whoToDrawExpanded);
 	}
-	public static void ShowAllBallotsSortedByCandidate(Dictionary<Candidate, List<Ballot>> votesPerCandidate, IList<Candidate> candidates, HashSet<Candidate>? exhausted = null, HashSet<Candidate>? whoToDrawExpanded = null) {
+	public static void ShowAllBallotsSortedByCandidate(VotesPerCandidate votesPerCandidate, IList<Candidate> candidates, HashSet<Candidate>? exhausted = null, HashSet<Candidate>? whoToDrawExpanded = null) {
 		ShowAllBallots(GetBallotList(votesPerCandidate, candidates), candidates, exhausted, whoToDrawExpanded);
 	}
 
-	public static List<Ballot> GetBallotList(Dictionary<Candidate, List<Ballot>> votesPerCandidate, IList<Candidate> candidatesInOrder) {
+	public static List<Ballot> GetBallotList(VotesPerCandidate votesPerCandidate, IList<Candidate> candidatesInOrder) {
 		List<Ballot> sortedList = new List<Ballot>();
 		for (int i = 0; i < candidatesInOrder.Count; ++i) {
 			if (votesPerCandidate.TryGetValue(candidatesInOrder[i], out List<Ballot>? candidateBallots)) {
@@ -112,7 +113,7 @@ public class Print {
 
 
 	public static void ShowFancyVisual(IList<VoteBloc> from, IList<Candidate> candidates, int width, HashSet<Candidate>? out_exhaustedThisTime,
-		Dictionary<Candidate, List<Ballot>>? stateNow = null, Dictionary<Candidate, List<Ballot>>? stateNext = null) {
+		VotesPerCandidate? stateNow = null, VotesPerCandidate? stateNext = null) {
 		int height = candidates.Count;
 		EnsureMinimum(width, height);
 		void Render(int delay = 0) {
@@ -178,6 +179,10 @@ public class Print {
 		DrawVoteBlocsToLine(normalBlocs, buffer.text[0], buffer.color[0]);
 		DrawVoteBlocsToLine(exhaustedBlocs, buffer.text[1], buffer.color[1]);
 		Render(500);
+
+		// TODO show full ballots of those blocks
+		// ShowAllBallots(stateNow, candidates, exhausted, out_exhaustedThisTime);
+		// show full ballots after exhausted canidate is removed
 
 		char[] exhaustedAnimating = new char[width];
 		char[] exhaustedConverted = new char[width];
@@ -245,9 +250,13 @@ public class ConsoleBuffer {
 	public void Resize(int width, int height) {
 		char[][] newText = new char[height][];
 		ConsoleColor[][] newColor = new ConsoleColor[height][];
-		for (int i = 0; i < height; ++i) {
-			newText[i] = new char[width];
-			newColor[i] = new ConsoleColor[width];
+		for (int row = 0; row < height; ++row) {
+			newText[row] = new char[width];
+			newColor[row] = new ConsoleColor[width];
+			for (int col = 0; col < width; ++col) {
+				newText[row][col] = 'x';
+				newColor[row][col] = ConsoleColor.Gray;
+			}
 		}
 		if (text != null) {
 			for (int r = 0; r < height && r < text.Length; ++r) {
