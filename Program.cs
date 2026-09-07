@@ -3,7 +3,7 @@ using irv.src;
 using src;
 using src.Core;
 using System.Text;
-using VotesPerCandidate = irv.src.VoteState;//Dictionary<Candidate, List<Ballot>>;
+
 public class Program {
 	public static void Main(string[] args) {
 		List<Ballot> votes = new List<Ballot>();
@@ -99,7 +99,7 @@ public class Program {
 						//	Log.WriteLine(StateToString(allStates[i + 1], out width));
 						//}
 						HashSet<Candidate> exhaustedThisTime = new HashSet<Candidate>();
-						VotesPerCandidate? next_vState = i < election.voteStates.Count-1 ? election.voteStates[i + 1] : null;
+						VoteState? next_vState = i < election.voteStates.Count-1 ? election.voteStates[i + 1] : null;
 						Print.ShowFancyVisual(state, candidates, 100, exhaustedThisTime, election.voteStates[i], next_vState);
 						// TODO show full ballot visualization as part of fancy visual.
 						// after candidate is dropped, show all ballots, tick the candidate off, then go back to compressed line form

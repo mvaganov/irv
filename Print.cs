@@ -4,12 +4,11 @@ using src;
 using static Program;
 namespace irv;
 
-using VotesPerCandidate = VoteState;//Dictionary<Candidate, List<Ballot>>;
 public class Print {
 	public static ConsoleBuffer buffer = new ConsoleBuffer(), back = new ConsoleBuffer();
 	static Print() {
 	}
-	public static void DebugShow(VotesPerCandidate tally, HashSet<Candidate> exhaustedCandidates) {
+	public static void DebugShow(VoteState tally, HashSet<Candidate> exhaustedCandidates) {
 		List<Candidate> inOrder = CompleteElectionResults.OrderByBallotCount(tally);
 		ShowAllBallotsSortedByCandidate(tally, inOrder, exhaustedCandidates, null);
 		int w = 100;
@@ -59,15 +58,15 @@ public class Print {
 		return migrants;
 	}
 	public static void ShowAllBallotsSortedByCandidate(IList<Ballot> ballots, IList<Candidate> candidates, HashSet<Candidate>? exhausted = null, HashSet<Candidate>? whoToDrawExpanded = null) {
-		VotesPerCandidate votesPerCandidate = new VotesPerCandidate();
+		VoteState votesPerCandidate = new VoteState();
 		CompleteElectionResults.TallyVotes(votesPerCandidate, ballots, exhausted, null);
 		ShowAllBallotsSortedByCandidate(votesPerCandidate, candidates, exhausted, whoToDrawExpanded);
 	}
-	public static void ShowAllBallotsSortedByCandidate(VotesPerCandidate votesPerCandidate, IList<Candidate> candidates, HashSet<Candidate>? exhausted = null, HashSet<Candidate>? whoToDrawExpanded = null) {
+	public static void ShowAllBallotsSortedByCandidate(VoteState votesPerCandidate, IList<Candidate> candidates, HashSet<Candidate>? exhausted = null, HashSet<Candidate>? whoToDrawExpanded = null) {
 		ShowAllBallots(GetBallotList(votesPerCandidate, candidates), candidates, exhausted, whoToDrawExpanded);
 	}
 
-	public static List<Ballot> GetBallotList(VotesPerCandidate votesPerCandidate, IList<Candidate> candidatesInOrder) {
+	public static List<Ballot> GetBallotList(VoteState votesPerCandidate, IList<Candidate> candidatesInOrder) {
 		List<Ballot> sortedList = new List<Ballot>();
 		for (int i = 0; i < candidatesInOrder.Count; ++i) {
 			if (votesPerCandidate.TryGetValue(candidatesInOrder[i], out List<Ballot>? candidateBallots)) {
@@ -113,7 +112,7 @@ public class Print {
 
 
 	public static void ShowFancyVisual(IList<VoteBloc> from, IList<Candidate> candidates, int width, HashSet<Candidate>? out_exhaustedThisTime,
-		VotesPerCandidate? stateNow = null, VotesPerCandidate? stateNext = null) {
+		VoteState? stateNow = null, VoteState? stateNext = null) {
 		int height = candidates.Count;
 		EnsureMinimum(width, height);
 		void Render(int delay = 0) {
