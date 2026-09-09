@@ -58,8 +58,7 @@ public class Print {
 		return migrants;
 	}
 	public static void ShowAllBallotsSortedByCandidate(IList<Ballot> ballots, IList<Candidate> candidates, HashSet<Candidate>? exhausted = null, HashSet<Candidate>? whoToDrawExpanded = null) {
-		VoteState votesPerCandidate = new VoteState();
-		CompleteElectionResults.TallyVotes(votesPerCandidate, ballots, exhausted, null);
+		VoteState votesPerCandidate = new VoteState(ballots, exhausted);
 		ShowAllBallotsSortedByCandidate(votesPerCandidate, candidates, exhausted, whoToDrawExpanded);
 	}
 	public static void ShowAllBallotsSortedByCandidate(VoteState votesPerCandidate, IList<Candidate> candidates, HashSet<Candidate>? exhausted = null, HashSet<Candidate>? whoToDrawExpanded = null) {

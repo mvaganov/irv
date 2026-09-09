@@ -85,7 +85,7 @@ public class Candidate : IComparable<Candidate> {
 public class Ballot {
 	public string? id;
 	public Candidate[]? RankedVote;
-	public float BallotWeight = 1; // allows votes to count more or less than others
+	public float BallotWeight = 1; // useful for combining identical ballots
 	public override string? ToString() => (RankedVote != null ? "[" + string.Join(", ", Array.ConvertAll(RankedVote, v => v.name)) + "]" : "")
 		+ (BallotWeight != 1 ? $"({BallotWeight})" : "");
 	public int GetBestChoiceIndex(HashSet<Candidate> exhastedCandidates) {
@@ -106,8 +106,11 @@ public class Ballot {
 
 public class VoteState : IDictionary<Candidate, List<Ballot>> {
 	public Dictionary<Candidate, List<Ballot>> votesPerCandidate = new Dictionary<Candidate, List<Ballot>>();
+	public HashSet<Candidate>? exhausted = new HashSet<Candidate>();
+	public string note = string.Empty; // TODO -- "initial state -({prev winners})", "uncompetitive candidate cull: -({candidate})", "weakest candidate cull: -({candidate})"
 	public ICollection<Candidate> Keys => votesPerCandidate.Keys;
 	public ICollection<List<Ballot>> Values => votesPerCandidate.Values;
+	// TODO rename TotalCandidateCount
 	public int Count => votesPerCandidate.Count;
 	public bool IsReadOnly => ((IDictionary<Candidate, List<Ballot>>)votesPerCandidate).IsReadOnly;
 	public bool TryGetValue(Candidate candidate, [NotNullWhen(true)] out List<Ballot>? votes) => votesPerCandidate.TryGetValue(candidate, out votes);
@@ -125,15 +128,36 @@ public class VoteState : IDictionary<Candidate, List<Ballot>> {
 		get => votesPerCandidate[candidate];
 		set => votesPerCandidate[candidate] = value;
 	}
-	//public HashSet<Candidate> exhausted = new HashSet<Candidate>();
-	//public string note = string.Empty; // TODO -- "initial state -({prev winners})", "uncompetitive candidate cull: -({candidate})", "weakest candidate cull: -({candidate})"
-	//public int TotalCandidateCount => votesPerCandidate.Count;
-	//public List<Ballot> GetVotes(Candidate candidate) {
-	//	if (votesPerCandidate.TryGetValue(candidate, out List<Ballot>? votes) || votes == null) {
-	//		votesPerCandidate[candidate] = votes = new List<Ballot>();
-	//	}
-	//	return votes;
-	//}
+	public VoteState(IList<Ballot> ballots, HashSet<Candidate>? exhastedCandidates) {
+		exhausted = exhastedCandidates;
+		TallyVotes(ballots);
+	}
+	private void TallyVotes(IList<Ballot> ballots) {
+		foreach (var kvp in votesPerCandidate) {
+			kvp.Value?.Clear();
+		}
+		for (int i = 0; i < ballots.Count; ++i) {
+			Ballot b = ballots[i];
+			Candidate? bestChoice = b.GetBestChoice(exhausted);
+			if (bestChoice == null) continue;
+			List<Ballot>? supportForChoice = GetVotes(bestChoice);
+			supportForChoice.Add(b);
+		}
+	}
+	public VoteState(VoteState other) {
+		foreach (var k in other.votesPerCandidate) {
+			List<Ballot> list = votesPerCandidate[k.Key] = new List<Ballot>();
+			list.AddRange(k.Value);
+		}
+		note = other.note;
+		exhausted = other.exhausted != null ? new HashSet<Candidate>(other.exhausted) : null;
+	}
+	public List<Ballot> GetVotes(Candidate candidate) {
+		if (!votesPerCandidate.TryGetValue(candidate, out List<Ballot>? votes) || votes == null) {
+			votesPerCandidate[candidate] = votes = new List<Ballot>();
+		}
+		return votes;
+	}
 	//public int CountValidCandidates() {
 	//	int count = 0;
 	//	foreach (var k in votesPerCandidate) {
@@ -147,14 +171,7 @@ public class VoteState : IDictionary<Candidate, List<Ballot>> {
 	//	foreach (var kvp in votesPerCandidate) { this.votesPerCandidate.Add(kvp.Key, kvp.Value); }
 	//	foreach (var k in exhausted) { this.exhausted.Add(k); }
 	//}
-	//public VoteState(VoteState other) {
-	//	foreach (var k in other.votesPerCandidate) {
-	//		List<Ballot> list = votesPerCandidate[k.Key] = new List<Ballot>();
-	//		list.AddRange(k.Value);
-	//	}
-	//	note = other.note;
-	//	exhausted = new HashSet<Candidate>(other.exhausted);
-	//}
+
 	//public VoteState() { }
 	//public float SumUnexhaustedVotes() {
 	//	float sumVotes = 0;
@@ -200,13 +217,6 @@ public class VoteState : IDictionary<Candidate, List<Ballot>> {
 	//	}
 	//	return exhaustedBallots;
 	//}
-}
-
-public class VoteStateVisualization {
-	public List<VoteBloc> data;
-	public VoteStateVisualization(List<VoteBloc> data) {
-		this.data = data;
-	}
 }
 public class VoteVisualization {
 	/// <summary>data to describe graphical representation [IRV rank][candidate]</summary>
@@ -398,31 +408,11 @@ public class CompleteElectionResults {
 		foreach (Candidate c in candidates) exhaustedCandidates.Add(c);
 	}
 	public void AddVoteCalculationState(List<Ballot> allBallots) {
-		VoteState tally = new VoteState();
-		TallyVotes(tally, allBallots, exhaustedCandidates);
+		VoteState tally = new VoteState(allBallots, exhaustedCandidates);
 		voteStates.Add(tally);
 		//Print.DebugShow(tally, exhaustedCandidates);
 	}
 
-	// TODO move to VoteState
-	/// <param name="out_tally">a table of all of the votes, seperated by vote winner</param>
-	/// <param name="exhastedCandidates">candidates who should not count (move to the next choice in the vote's ranked list)</param>
-	public void TallyVotes(VoteState out_tally, IList<Ballot> ballots, HashSet<Candidate>? exhastedCandidates) =>
-		TallyVotes(out_tally, ballots, exhastedCandidates, candidateForExhausted);
-	public static void TallyVotes(VoteState out_tally, IList<Ballot> ballots, HashSet<Candidate>? exhastedCandidates, Candidate? candidateForExhausted) {
-		for (int i = 0; i < ballots.Count; ++i) {
-			Ballot b = ballots[i];
-			Candidate? bestChoice = b.GetBestChoice(exhastedCandidates);
-			if (bestChoice == null) bestChoice = candidateForExhausted;
-			if (bestChoice == null) continue;
-			//List<Ballot>? supportForChoice = out_tally.GetVotes(bestChoice); // TODO use this
-			List<Ballot>? supportForChoice = out_tally.ContainsKey(bestChoice) ? out_tally[bestChoice] : null;
-			if (supportForChoice == null) {
-				out_tally[bestChoice] = supportForChoice = new List<Ballot>();
-			}
-			supportForChoice.Add(b);
-		}
-	}
 	public static List<Candidate> OrderByBallotCount(VoteState tally) {
 		List<Candidate> out_order = new List<Candidate>();
 		OrderByBallotCount(tally, out_order);
@@ -434,15 +424,7 @@ public class CompleteElectionResults {
 	}
 
 	public void DuplicateLatestState() {
-		//voteState.Add(new VoteState(CurrentCandidateVoteTallies)); // TODO use this
-		voteStates.Add(CloneVotesPerCandidate(CurrentCandidateVoteTallies));
-	}
-	static VoteState CloneVotesPerCandidate(VoteState tally) {
-		VoteState cloned = new VoteState();
-		foreach (var k in tally) {
-			cloned[k.Key] = new List<Ballot>(k.Value);
-		}
-		return cloned;
+		voteStates.Add(new VoteState(CurrentCandidateVoteTallies));
 	}
 	public bool CalculateWinner(float pluralityPercentage, out float voteCount) {
 		winner = MajorityCandidates(CurrentCandidateVoteTallies, out voteCount, pluralityPercentage);
@@ -680,24 +662,6 @@ public class IRV {
 			if (blocList[i].candidate == candidateName) { return i; }
 		}
 		return -1;
-	}
-
-	public static Dictionary<Candidate,float> CalculateWeightByStateImportance(List<VoteState> voteStateHistory) {
-		Dictionary<Candidate, float> weightsForThisVisualization = new Dictionary<Candidate, float>();
-		for (int s = 0; s < voteStateHistory.Count; ++s) {
-			VoteState state = voteStateHistory[s];
-			foreach (KeyValuePair<Candidate, List<Ballot>> kvp in state) {
-				//float voteCountOfCandidate = SumVoteValue(kvp.Value);
-				//if (weightsForThisVisualization.TryGetValue(kvp.Key, out float val)) {
-				//	val += voteCountOfCandidate;
-				//} else {
-				//	val = voteCountOfCandidate;
-				//}
-				//weightsForThisVisualization[kvp.Key] = val;
-				weightsForThisVisualization[kvp.Key] = kvp.Key.HarmonicBordaCount;// TotalVotesWeighted;
-			}
-		}
-		return weightsForThisVisualization;
 	}
 
 	private IEnumerator<Response> ElectionCalculation(
