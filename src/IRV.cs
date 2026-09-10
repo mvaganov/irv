@@ -182,41 +182,48 @@ public class VoteState : IDictionary<Candidate, List<Ballot>> {
 	//	}
 	//	return sumVotes;
 	//}
-	//public List<Ballot> ExhaustCandidate(Candidate candidate, Candidate? candidateForExhausted, Dictionary<Candidate, List<Ballot>> whereVotesMovedTo) {
-	//	exhausted.Add(candidate);
-	//	List<Ballot> exhaustedBallots = new List<Ballot>();
-	//	if (!votesPerCandidate.TryGetValue(candidate, out List<Ballot>? votes)) {
-	//		votes = new List<Ballot>();
-	//	} else {
-	//		votesPerCandidate.Remove(candidate);
-	//	}
-	//	for (int i = 0; i < votes.Count; ++i) {
-	//		Ballot ballot = votes[i];
-	//		Candidate? next = ballot.GetBestChoice(exhausted);
-	//		if (next == null) {
-	//			exhaustedBallots.Add(ballot);
-	//			if (candidateForExhausted != null) {
-	//				next = candidateForExhausted;
-	//				if (!votesPerCandidate.TryGetValue(candidateForExhausted, out List<Ballot>? exhuastedBallots)) {
-	//					votesPerCandidate[candidateForExhausted] = exhuastedBallots = new List<Ballot>();
-	//				}
-	//				exhuastedBallots.Add(ballot);
-	//			}
-	//		} else {
-	//			if (!votesPerCandidate.TryGetValue(next, out List<Ballot>? ballots)) {
-	//				votesPerCandidate[next] = ballots = new List<Ballot>();
-	//			}
-	//			ballots.Add(ballot);
-	//		}
-	//		if (whereVotesMovedTo != null && next != null) {
-	//			if (!whereVotesMovedTo.TryGetValue(next, out List<Ballot>? movedTo)) {
-	//				whereVotesMovedTo[next] = movedTo = new List<Ballot>();
-	//			}
-	//			movedTo.Add(ballot);
-	//		}
-	//	}
-	//	return exhaustedBallots;
-	//}
+	// TODO return vote migration history to caller, and insert into voteMigrationHistory outside of this method...
+	public List<Ballot> ExhaustCandidate(Candidate candidate, Candidate? candidateForExhausted, List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory) {
+		if (exhausted != null) { exhausted.Add(candidate); } else {
+			exhausted = new HashSet<Candidate> { candidate };
+		}
+		List<Ballot> exhaustedBallots = new List<Ballot>();
+		if (!TryGetValue(candidate, out List<Ballot>? votes)) {
+			votes = new List<Ballot>();
+		} else {
+			Remove(candidate);
+		}
+		Dictionary<Candidate, BallotsTransferingToCandidate> changesThisTime = new Dictionary<Candidate, BallotsTransferingToCandidate>();
+		BallotsTransferingToCandidate votesMoveTo = new BallotsTransferingToCandidate();
+		changesThisTime[candidate] = votesMoveTo;
+		voteMigrationHistory.Add(changesThisTime);
+		for (int i = 0; i < votes.Count; ++i) {
+			Ballot ballot = votes[i];
+			Candidate? next = ballot.GetBestChoice(exhausted);
+			if (next == null) {
+				exhaustedBallots.Add(ballot);
+				if (candidateForExhausted != null) {
+					next = candidateForExhausted;
+					if (!TryGetValue(candidateForExhausted, out List<Ballot>? exhuastedBallots)) {
+						this[candidateForExhausted] = exhuastedBallots = new List<Ballot>();
+					}
+					exhuastedBallots.Add(ballot);
+				}
+			} else {
+				if (!TryGetValue(next, out List<Ballot>? ballots)) {
+					this[next] = ballots = new List<Ballot>();
+				}
+				ballots.Add(ballot);
+			}
+			if (next != null) {
+				if (!votesMoveTo.TryGetValue(next, out List<Ballot>? movedTo)) {
+					votesMoveTo[next] = movedTo = new List<Ballot>();
+				}
+				movedTo.Add(ballot);
+			}
+		}
+		return exhaustedBallots;
+	}
 }
 public class VoteVisualization {
 	/// <summary>data to describe graphical representation [IRV rank][candidate]</summary>
@@ -711,7 +718,9 @@ public class IRV {
 					electionsToProcess.Add(election);
 				}
 				election.DuplicateLatestState();
-				election.ExhaustCandidate(election.CurrentCandidateVoteTallies, losers[i]);
+				// TODO continue refactoring this method. where should voteMigrationHistory live?
+				election.CurrentCandidateVoteTallies.ExhaustCandidate(losers[i], candidateForExhaustedBallots, election.voteMigrationHistory);
+				//election.ExhaustCandidate(election.CurrentCandidateVoteTallies, losers[i]);
 //				Print.DebugShow(election.CurrentCandidateVoteTallies, election.exhaustedCandidates);
 				yield return Response.Processing(electionsToProcess);
 			}
