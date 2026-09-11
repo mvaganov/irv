@@ -182,8 +182,7 @@ public class VoteState : IDictionary<Candidate, List<Ballot>> {
 	//	}
 	//	return sumVotes;
 	//}
-	// TODO return vote migration history to caller, and insert into voteMigrationHistory outside of this method...
-	public List<Ballot> ExhaustCandidate(Candidate candidate, Candidate? candidateForExhausted, List<Dictionary<Candidate, BallotsTransferingToCandidate>> voteMigrationHistory) {
+	public List<Ballot> ExhaustCandidate(Candidate candidate, Candidate? candidateForExhausted, BallotsTransferingToCandidate? whereVotesMoveTo) {
 		if (exhausted != null) { exhausted.Add(candidate); } else {
 			exhausted = new HashSet<Candidate> { candidate };
 		}
@@ -193,10 +192,6 @@ public class VoteState : IDictionary<Candidate, List<Ballot>> {
 		} else {
 			Remove(candidate);
 		}
-		Dictionary<Candidate, BallotsTransferingToCandidate> changesThisTime = new Dictionary<Candidate, BallotsTransferingToCandidate>();
-		BallotsTransferingToCandidate votesMoveTo = new BallotsTransferingToCandidate();
-		changesThisTime[candidate] = votesMoveTo;
-		voteMigrationHistory.Add(changesThisTime);
 		for (int i = 0; i < votes.Count; ++i) {
 			Ballot ballot = votes[i];
 			Candidate? next = ballot.GetBestChoice(exhausted);
@@ -216,10 +211,13 @@ public class VoteState : IDictionary<Candidate, List<Ballot>> {
 				ballots.Add(ballot);
 			}
 			if (next != null) {
-				if (!votesMoveTo.TryGetValue(next, out List<Ballot>? movedTo)) {
-					votesMoveTo[next] = movedTo = new List<Ballot>();
+				List<Ballot>? votesMoving = null;
+				if (whereVotesMoveTo != null && !whereVotesMoveTo.TryGetValue(next, out votesMoving)) {
+					whereVotesMoveTo[next] = votesMoving = new List<Ballot>();
 				}
-				movedTo.Add(ballot);
+				if (votesMoving != null) {
+					votesMoving.Add(ballot);
+				}
 			}
 		}
 		return exhaustedBallots;
@@ -462,6 +460,14 @@ public class CompleteElectionResults {
 			sumVotes += voteCount;
 		}
 		return sumVotes;
+	}
+	public void ExhaustCandidateAsNextStep(Candidate toExhaust) {
+		DuplicateLatestState();
+		BallotsTransferingToCandidate whereVotesMoveTo = new BallotsTransferingToCandidate();
+		CurrentCandidateVoteTallies.ExhaustCandidate(toExhaust, candidateForExhausted, whereVotesMoveTo);
+		Dictionary<Candidate, BallotsTransferingToCandidate> changesThisTime = new Dictionary<Candidate, BallotsTransferingToCandidate>();
+		changesThisTime[toExhaust] = whereVotesMoveTo;
+		voteMigrationHistory.Add(changesThisTime);
 	}
 	public List<Ballot> ExhaustCandidate(VoteState state, Candidate candidate) {
 		exhaustedCandidates.Add(candidate);
@@ -717,10 +723,7 @@ public class IRV {
 					election.label += "drop " + losers[i];
 					electionsToProcess.Add(election);
 				}
-				election.DuplicateLatestState();
-				// TODO continue refactoring this method. where should voteMigrationHistory live?
-				election.CurrentCandidateVoteTallies.ExhaustCandidate(losers[i], candidateForExhaustedBallots, election.voteMigrationHistory);
-				//election.ExhaustCandidate(election.CurrentCandidateVoteTallies, losers[i]);
+				election.ExhaustCandidateAsNextStep(losers[i]);
 //				Print.DebugShow(election.CurrentCandidateVoteTallies, election.exhaustedCandidates);
 				yield return Response.Processing(electionsToProcess);
 			}
