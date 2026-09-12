@@ -78,11 +78,13 @@ public class Candidate : IComparable<Candidate> {
 
 	public int CompareTo(Candidate? other) {
 		return other == null ? 1
-			: TotalVotesWeighted != other.TotalVotesWeighted ? TotalVotesWeighted.CompareTo(other.TotalVotesWeighted)
-			: HarmonicBordaCount.CompareTo(other.HarmonicBordaCount);
+			: TotalVotesWeighted != other.TotalVotesWeighted
+			? TotalVotesWeighted.CompareTo(other.TotalVotesWeighted)
+			: HarmonicBordaCount.CompareTo(other.HarmonicBordaCount)
+			;
 	}
 }
-public class Ballot {
+public class Ballot : IComparable<Ballot> {
 	public string? id;
 	public Candidate[]? RankedVote;
 	public float BallotWeight = 1; // useful for combining identical ballots
@@ -101,6 +103,22 @@ public class Ballot {
 		if (RankedVote == null) return null;
 		int index = exhastedCandidates != null ? GetBestChoiceIndex(exhastedCandidates) : 0;
 		return index >= 0 ? RankedVote[index] : null;
+	}
+	public int CompareTo(Ballot? other) {
+		if (other == null) return 1;
+		if (other.RankedVote == null && RankedVote == null) return 1;
+		if (other.RankedVote == null) return -1;
+		if (RankedVote == null) return 1;
+		int result = 0;
+		for(int i = 0; i < RankedVote.Length && i < other.RankedVote.Length; ++i) {
+			Candidate a = RankedVote[i], b = other.RankedVote[i];
+			if (a == b) continue;
+			result = b.CompareTo(a);
+			if (result != 0) return result;
+		}
+		if (RankedVote.Length > other.RankedVote.Length) return -1;
+		if (RankedVote.Length < other.RankedVote.Length) return 1;
+		return 0;
 	}
 }
 
